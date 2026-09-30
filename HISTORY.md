@@ -133,3 +133,21 @@
 - Plane thrust cuts if effectiveness falls below 0.75 or steering error exceeds 5°.
 - Final Ap/Pe cleanup happens only after plane capture.
 - Current development build; next regression target remains 80 km / 30° ascending.
+
+## SV-5.4 80 km / 30° test
+
+- **FAIL / architecture rejected**.
+- Booster burnout inclination was 32.884171° and ascent cutoff inclination was 32.933197°, showing that the low/current-speed rotation-compensation approach overcorrected the launch plane.
+- Radial/tangential insertion remained strong, reaching roughly 80.00084 × 79.98867 km late in the run.
+- The remaining plane error was about 3.19°, reinforcing that a sequential post-insertion plane-change architecture was solving the wrong problem.
+
+## SV-5.5 — direct-plane launch + powered-burn yaw trim
+
+- Returns to a single continuous second-stage ascent/insertion architecture.
+- Introduces a tunable launch-plane reference speed of 1800 m/s for Kerbin-rotation compensation; this is intended to bracket the previous 29.3° undershoot and 32.9° overshoot.
+- Booster follows the fixed inertial target-plane great-circle tangent.
+- Upper stage steers an inertial in-plane pitch vector and adds only a small normal component while already under power.
+- Plane trim is limited to 1.5° yaw in higher dynamic pressure and 3° in near-vacuum flight.
+- Terminal guidance reverts to the proven SV-3.3 radial/tangential controller with the same limited yaw trim layered on top.
+- Plane trim vanishes automatically when radial/tangential guidance no longer requests thrust, preventing a separate plane-change burn.
+- Current development build; next regression target remains 80 km / 30° ascending.
