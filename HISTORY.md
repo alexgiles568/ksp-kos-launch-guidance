@@ -79,3 +79,20 @@
 - Adds an independent plane feasibility horizon using displacement and cross velocity, then uses the larger of along-track and plane horizons for coarse constraint guidance.
 - Fine mode now requires cross-plane position and velocity to be controlled as well as small along-track error.
 - Current development build; pending 80 km / 30° re-test.
+
+## SV-5.1 80 km / 30° re-test
+
+- **FAIL** — 80.664605 × 79.999997 km, final inclination 29.451662°.
+- Terminal guidance began at 29.315343° inclination while the controller believed it was 8096.8 m away from the target plane.
+- The stored target plane was still tied to raw/surface-derived vectors, so Kerbin rotation / SHIP-RAW frame evolution corrupted the intended fixed celestial plane.
+- The translational plane-position controller then drove large cross-plane velocity and apoapsis growth.
+
+## SV-5.2 — inertial plane / orbit-normal guidance
+
+- Freezes the requested plane as scalar coefficients relative to an inertial basis built from `SOLARPRIMEVECTOR` and the body's `ANGULARVEL` pole.
+- Reconstructs the target plane normal every physics tick in current SHIP-RAW coordinates.
+- Keeps the rotation-compensated great-circle ascent logic, now referenced to the reconstructed fixed inertial plane.
+- Replaces plane-position / cross-track translation guidance with direct orbital-normal error control.
+- Uses a small hypothetical normal-dV probe to choose the locally helpful normal-burn sign and estimate local plane-change effectiveness.
+- Fine mode and final capture are keyed to orbital-plane angle rather than instantaneous geometric distance from the target plane.
+- Current development build; next regression target is 80 km / 30° ascending.
