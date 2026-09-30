@@ -11,7 +11,8 @@
 - `sv401_equatorial_reference.ks` — SV-4.0.1 frozen equatorial 3-D reference.
 - `sv50_gui_original_broken.ks` — original SV-5.0 GUI build, retaining both discovered GUI bugs.
 - `sv501_gui_clear_fix_broken_popup.ks` — SV-5.0.1 with `CLEARGUIS()` fixed but popup string assignment still broken.
-- `sv502_mission_config.ks` — current SV-5.0.2 branch with both known GUI issues fixed.
+- `sv502_mission_config.ks` — SV-5.0.2 branch with both known GUI issues fixed.
+- `sv51_plane_guidance.ks` — current SV-5.1 rotation-compensated, feasibility-aware plane-guidance branch.
 
 ## Reconstructed source
 
