@@ -167,3 +167,21 @@
 - Terminal plane-trim time floor reduced from 8 s to 6 s.
 - Yaw remains capped at 1.5° in higher dynamic pressure and 3° in near-vacuum/terminal flight.
 - Radial/tangential guidance remains the proven SV-3.3 controller.
+
+## SV-5.6 80 km / 30° test
+
+- **MUCH CLOSER / ORBIT NEAR-PASS** — final 79.99987 × 79.98585 km, inclination 29.83155°, plane error 0.54737°.
+- Booster burnout inclination was 29.60771°, versus 28.99951° for SV-5.5 at the 1800 m/s launch reference.
+- Terminal guidance began with 0.56228° plane error and briefly saturated the 3° yaw cap while local plane-change effectiveness was useful.
+- The plane error fell to about 0.54737° before the useful geometry passed.
+- Orbit capture missed the ±10 m box only because Pe settled around 14 m low and the fine-burn deadband prevented a final tiny correction.
+
+## SV-5.7 — 1300 m/s launch calibration / stronger continuous trim
+
+- Launch reference reduced from 1500 to 1300 m/s; interpolation of SV-5.5 and SV-5.6 booster results puts 30° near this value.
+- Upper-stage yaw cap increased to 3° at higher dynamic pressure and 5° near vacuum.
+- Terminal yaw cap increased to 5° while remaining tied to the normal radial/tangential insertion burn.
+- Upper-stage trim time constant reduced to 10 s and terminal trim time floor to 5 s.
+- Fine-burn hysteresis reduced so the controller can close the last few meters of apsis error.
+- Tiny terminal burns are inhibited while steering error exceeds 8°.
+- Adds `sv57ascent.csv` for upper-stage plane-error, local-dV, effectiveness, yaw-trim and steering diagnostics.
