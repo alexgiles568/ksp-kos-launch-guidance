@@ -1,5 +1,5 @@
 // ======================================================
-// SV-5.0.2 MISSION CONFIG
+// SV-5.1 MISSION CONFIG
 // 0.625 m TWO-STAGE LIQUID LAUNCHER
 //
 // CONFIGURABLE:
@@ -9,16 +9,18 @@
 //
 // Derived from successful SV-4.0.1 / SV-3.3 guidance.
 //
-// GUI fixes in SV-5.0.2:
-// - CLEARGUIS() called as a function.
-// - Popup selection uses numeric INDEX rather than
-//   assigning/reading strings through PopupMenu:VALUE.
+// SV-5.1:
+// - Keeps both SV-5.0.2 GUI fixes.
+// - Rotation-compensated, target-plane-following ascent azimuth.
+// - Plane-error-aware terminal acquisition.
+// - Multi-axis guidance horizon.
+// - Fine mode cannot latch until cross-plane state is controlled.
 //
 // FAIRING MUST BE ON ACTION GROUP 1
 //
 // Logs:
-//   0:/sv502flight.csv
-//   0:/sv502guidance.csv
+//   0:/sv51flight.csv
+//   0:/sv51guidance.csv
 // ======================================================
 
 CLEARSCREEN.
@@ -38,7 +40,7 @@ SET configGui:X TO 50.
 SET configGui:Y TO 80.
 SET configGui:DRAGGABLE TO TRUE.
 
-SET titleLabel TO configGui:ADDLABEL("SV-5.0.2 LAUNCH GUIDANCE").
+SET titleLabel TO configGui:ADDLABEL("SV-5.1 LAUNCH GUIDANCE").
 SET titleLabel:STYLE:ALIGN TO "CENTER".
 SET titleLabel:STYLE:HSTRETCH TO TRUE.
 
@@ -170,6 +172,21 @@ SET radialTgoFloor TO 4.
 SET radialAccelLimit TO 6.
 SET planeAccelLimit TO 10.
 
+// Plane feasibility timing.
+// A rest-to-rest translation over distance d under
+// acceleration a needs about 2*sqrt(d/a).  Cross velocity
+// also gets a conservative 2*v/a stopping horizon.
+
+SET planeTimePositionFactor TO 2.
+SET planeTimeVelocityFactor TO 2.
+SET planeLeadMargin TO 2.
+
+// Fine mode is not allowed to latch solely because
+// along-track speed is nearly correct.
+
+SET planeFineLatchPosition TO 250.
+SET planeFineLatchVelocity TO 10.
+
 SET constraintAllocationFraction TO 0.98.
 SET startLeadBias TO 0.8.
 
@@ -220,8 +237,8 @@ SET thrustActive TO TRUE.
 // LOG FILES
 // ======================================================
 
-SET flightLog TO "0:/sv502flight.csv".
-SET guidanceLog TO "0:/sv502guidance.csv".
+SET flightLog TO "0:/sv51flight.csv".
+SET guidanceLog TO "0:/sv51guidance.csv".
 
 IF EXISTS(flightLog) {
     DELETEPATH(flightLog).
@@ -236,7 +253,7 @@ LOG
 TO flightLog.
 
 LOG
-"MET,mode,actuator,alt_m,inc_deg,plane_angle_deg,plane_error_m,radial_vel_mps,cross_vel_mps,along_vel_mps,circular_vel_mps,along_error_mps,tgo_s,natural_radial_accel,natural_cross_accel,radial_req_accel,cross_req_accel,along_req_accel,radial_alloc_accel,cross_alloc_accel,along_alloc_accel,max_accel,command_accel,throttle,ap_m,pe_m,ap_error_m,pe_error_m,fine_latched,capture,steer_angle_err_deg"
+"MET,mode,actuator,alt_m,inc_deg,plane_angle_deg,plane_error_m,radial_vel_mps,cross_vel_mps,along_vel_mps,circular_vel_mps,along_error_mps,along_tgo_s,plane_tgo_req_s,guidance_time_s,plane_ready_fine,natural_radial_accel,natural_cross_accel,radial_req_accel,cross_req_accel,along_req_accel,radial_alloc_accel,cross_alloc_accel,along_alloc_accel,max_accel,command_accel,throttle,ap_m,pe_m,ap_error_m,pe_error_m,fine_latched,capture,steer_angle_err_deg"
 TO guidanceLog.
 
 // ======================================================
@@ -480,15 +497,64 @@ IF launchAlongVec:MAG < 0.000001 {
 
 SET launchAlongHat TO launchAlongVec:NORMALIZED.
 
+// ======================================================
+// ROTATION-COMPENSATED LAUNCH AZIMUTH
+//
+// launchAlongHat is the desired INERTIAL orbit direction.
+// HEADING() is surface-relative, so subtract the local
+// rotational frame velocity before deriving the heading.
+// ======================================================
+
+SET targetCircularSpeedRef TO
+    SQRT(
+        SHIP:BODY:MU /
+        (
+            SHIP:BODY:RADIUS +
+            orbitTarget
+        )
+    ).
+
+SET launchRotationVel TO
+    SHIP:VELOCITY:ORBIT -
+    SHIP:VELOCITY:SURFACE.
+
+SET desiredLaunchInertialVel TO
+    launchAlongHat *
+    targetCircularSpeedRef.
+
+SET desiredLaunchSurfaceVel TO
+    desiredLaunchInertialVel -
+    launchRotationVel.
+
+SET desiredLaunchSurfaceVel TO
+    desiredLaunchSurfaceVel -
+    (
+        launchUp *
+        VDOT(
+            desiredLaunchSurfaceVel,
+            launchUp
+        )
+    ).
+
+IF desiredLaunchSurfaceVel:MAG <
+   0.000001 {
+
+    SET desiredLaunchSurfaceVel TO
+        launchAlongHat.
+}.
+
+SET launchSurfaceHat TO
+    desiredLaunchSurfaceVel:NORMALIZED.
+
 SET launchNorthComponent TO
     VDOT(
-        launchAlongHat,
+        launchSurfaceHat,
         launchNorth
     ).
 
 SET launchEastComponent TO
     VDOT(
-        launchAlongHat,
+        launchSurfaceHat,
         launchEast
     ).
 
@@ -502,13 +568,16 @@ IF launchAzimuth < 0 {
     SET launchAzimuth TO launchAzimuth + 360.
 }.
 
+SET guidanceAzimuth TO
+    launchAzimuth.
+
 // ======================================================
 // MISSION SUMMARY
 // ======================================================
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.0.2 MISSION =====".
+PRINT "===== SV-5.1 MISSION =====".
 PRINT "".
 PRINT "TARGET ALT: " + ROUND(orbitTarget / 1000,2) + " km".
 PRINT "TARGET INC: " + ROUND(targetInclination,3) + " deg".
@@ -555,6 +624,78 @@ UNTIL boosterBurnout {
 
     SET surfSpd TO SHIP:VELOCITY:SURFACE:MAG.
 
+    // Recompute the surface-relative heading that follows
+    // the fixed target inertial plane at the current position.
+
+    SET planeUp TO SHIP:UP:VECTOR.
+    SET planeNorth TO SHIP:NORTH:VECTOR.
+    SET planeEast TO HEADING(90,0):VECTOR.
+
+    SET planeAlongVec TO
+        VCRS(
+            targetPlaneNormal,
+            planeUp
+        )
+        *
+        alongCrossSign.
+
+    IF planeAlongVec:MAG < 0.000001 {
+        SET planeAlongVec TO launchAlongHat.
+    }.
+
+    SET planeAlongHat TO
+        planeAlongVec:NORMALIZED.
+
+    SET planeRotationVel TO
+        SHIP:VELOCITY:ORBIT -
+        SHIP:VELOCITY:SURFACE.
+
+    SET desiredPlaneSurfaceVel TO
+        (
+            planeAlongHat *
+            targetCircularSpeedRef
+        )
+        -
+        planeRotationVel.
+
+    SET desiredPlaneSurfaceVel TO
+        desiredPlaneSurfaceVel -
+        (
+            planeUp *
+            VDOT(
+                desiredPlaneSurfaceVel,
+                planeUp
+            )
+        ).
+
+    IF desiredPlaneSurfaceVel:MAG > 0.000001 {
+
+        SET desiredPlaneSurfaceHat TO
+            desiredPlaneSurfaceVel:NORMALIZED.
+
+        SET planeNorthComponent TO
+            VDOT(
+                desiredPlaneSurfaceHat,
+                planeNorth
+            ).
+
+        SET planeEastComponent TO
+            VDOT(
+                desiredPlaneSurfaceHat,
+                planeEast
+            ).
+
+        SET guidanceAzimuth TO
+            ARCTAN2(
+                planeEastComponent,
+                planeNorthComponent
+            ).
+
+        IF guidanceAzimuth < 0 {
+            SET guidanceAzimuth TO guidanceAzimuth + 360.
+        }.
+    }.
+
     IF surfSpd < 40 {
 
         SET pitchCmd TO 90.
@@ -592,7 +733,7 @@ UNTIL boosterBurnout {
 
         LOCK STEERING TO
             HEADING(
-                launchAzimuth,
+                guidanceAzimuth,
                 pitchCmd
             ).
     }.
@@ -611,7 +752,7 @@ UNTIL boosterBurnout {
 
     PRINT "BOOSTER ASCENT        " AT(0,7).
     PRINT "ALT: " + ROUND(SHIP:ALTITUDE/1000,2) + " km      " AT(0,10).
-    PRINT "AZ: " + ROUND(launchAzimuth,2) + " deg      " AT(0,11).
+    PRINT "AZ: " + ROUND(guidanceAzimuth,2) + " deg      " AT(0,11).
     PRINT "AP: " + ROUND(SHIP:OBT:APOAPSIS/1000,2) + " km      " AT(0,12).
     PRINT "Q: " + ROUND(SHIP:Q,3) + " atm      " AT(0,13).
 
@@ -708,6 +849,78 @@ UNTIL ascentDone {
     SET surfSpd TO SHIP:VELOCITY:SURFACE:MAG.
     SET fpa TO 0.
 
+    // Continue following the target inertial plane as the
+    // great-circle course changes with position.
+
+    SET planeUp TO SHIP:UP:VECTOR.
+    SET planeNorth TO SHIP:NORTH:VECTOR.
+    SET planeEast TO HEADING(90,0):VECTOR.
+
+    SET planeAlongVec TO
+        VCRS(
+            targetPlaneNormal,
+            planeUp
+        )
+        *
+        alongCrossSign.
+
+    IF planeAlongVec:MAG < 0.000001 {
+        SET planeAlongVec TO launchAlongHat.
+    }.
+
+    SET planeAlongHat TO
+        planeAlongVec:NORMALIZED.
+
+    SET planeRotationVel TO
+        SHIP:VELOCITY:ORBIT -
+        SHIP:VELOCITY:SURFACE.
+
+    SET desiredPlaneSurfaceVel TO
+        (
+            planeAlongHat *
+            targetCircularSpeedRef
+        )
+        -
+        planeRotationVel.
+
+    SET desiredPlaneSurfaceVel TO
+        desiredPlaneSurfaceVel -
+        (
+            planeUp *
+            VDOT(
+                desiredPlaneSurfaceVel,
+                planeUp
+            )
+        ).
+
+    IF desiredPlaneSurfaceVel:MAG > 0.000001 {
+
+        SET desiredPlaneSurfaceHat TO
+            desiredPlaneSurfaceVel:NORMALIZED.
+
+        SET planeNorthComponent TO
+            VDOT(
+                desiredPlaneSurfaceHat,
+                planeNorth
+            ).
+
+        SET planeEastComponent TO
+            VDOT(
+                desiredPlaneSurfaceHat,
+                planeEast
+            ).
+
+        SET guidanceAzimuth TO
+            ARCTAN2(
+                planeEastComponent,
+                planeNorthComponent
+            ).
+
+        IF guidanceAzimuth < 0 {
+            SET guidanceAzimuth TO guidanceAzimuth + 360.
+        }.
+    }.
+
     IF surfSpd > 1 {
 
         SET fpaRatio TO
@@ -768,7 +981,7 @@ UNTIL ascentDone {
 
         LOCK STEERING TO
             HEADING(
-                launchAzimuth,
+                guidanceAzimuth,
                 pitchCmd
             ).
     }.
@@ -927,7 +1140,7 @@ SET exhaustVelocity TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.0.2 ACQUISITION =====".
+PRINT "===== SV-5.1 ACQUISITION =====".
 
 SET terminalStart TO FALSE.
 SET lastLog TO MISSIONTIME.
@@ -1032,17 +1245,64 @@ UNTIL terminalStart {
             / totalMassFlow.
     }.
 
+    SET planePositionTime TO 0.
+    SET planeVelocityTime TO 0.
+
+    IF planeAccelLimit > 0 {
+
+        SET planePositionTime TO
+            planeTimePositionFactor *
+            SQRT(
+                ABS(planeError) /
+                planeAccelLimit
+            ).
+
+        SET planeVelocityTime TO
+            planeTimeVelocityFactor *
+            ABS(crossVel) /
+            planeAccelLimit.
+    }.
+
+    SET planeRequiredTime TO
+        planePositionTime.
+
+    IF planeVelocityTime >
+       planeRequiredTime {
+
+        SET planeRequiredTime TO
+            planeVelocityTime.
+    }.
+
+    IF planeRequiredTime <
+       radialTgoFloor {
+
+        SET planeRequiredTime TO
+            radialTgoFloor.
+    }.
+
     SET startLead TO
         halfDvLead +
         startLeadBias.
+
+    SET planeStartLead TO
+        planeRequiredTime +
+        planeLeadMargin.
+
+    IF planeStartLead >
+       startLead {
+
+        SET startLead TO
+            planeStartLead.
+    }.
 
     PRINT "PLANE ERR: " + ROUND(planeError,1) + " m       " AT(0,7).
     PRINT "CROSS VEL: " + ROUND(crossVel,2) + " m/s     " AT(0,8).
     PRINT "ALONG ERR: " + ROUND(alongError,1) + " m/s     " AT(0,9).
     PRINT "INC: " + ROUND(SHIP:OBT:INCLINATION,4) + " deg      " AT(0,10).
     PRINT "FULL BURN: " + ROUND(burnEstimate,2) + " s        " AT(0,12).
-    PRINT "START LEAD: " + ROUND(startLead,2) + " s        " AT(0,13).
-    PRINT "ETA AP: " + ROUND(ETA:APOAPSIS,2) + " s        " AT(0,14).
+    PRINT "PLANE TGO: " + ROUND(planeRequiredTime,2) + " s        " AT(0,13).
+    PRINT "START LEAD: " + ROUND(startLead,2) + " s        " AT(0,14).
+    PRINT "ETA AP: " + ROUND(ETA:APOAPSIS,2) + " s        " AT(0,15).
 
     IF ETA:APOAPSIS <= startLead {
         SET terminalStart TO TRUE.
@@ -1063,7 +1323,7 @@ UNTIL terminalStart {
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.0.2 TERMINAL =====".
+PRINT "===== SV-5.1 TERMINAL =====".
 
 SET terminalStartMET TO MISSIONTIME.
 SET throttleCmd TO 0.
@@ -1158,8 +1418,20 @@ UNTIL terminalComplete
     SET apOrbitError TO orbitTarget - currentAp.
     SET peOrbitError TO orbitTarget - currentPe.
 
+    SET planeReadyForFine TO FALSE.
+
+    IF ABS(planeError) <=
+          planeFineLatchPosition
+       AND
+       ABS(crossVel) <=
+          planeFineLatchVelocity {
+
+        SET planeReadyForFine TO TRUE.
+    }.
+
     IF NOT fineLatched
-       AND ABS(alongError) <= fineLatchTanError {
+       AND ABS(alongError) <= fineLatchTanError
+       AND planeReadyForFine {
 
         SET fineLatched TO TRUE.
 
@@ -1193,6 +1465,64 @@ UNTIL terminalComplete
             / totalMassFlow.
     }.
 
+    // Independent plane feasibility horizon.
+
+    SET planePositionTime TO 0.
+    SET planeVelocityTime TO 0.
+
+    IF planeAccelLimit > 0 {
+
+        SET planePositionTime TO
+            planeTimePositionFactor *
+            SQRT(
+                ABS(planeError) /
+                planeAccelLimit
+            ).
+
+        SET planeVelocityTime TO
+            planeTimeVelocityFactor *
+            ABS(crossVel) /
+            planeAccelLimit.
+    }.
+
+    SET planeRequiredTime TO
+        planePositionTime.
+
+    IF planeVelocityTime >
+       planeRequiredTime {
+
+        SET planeRequiredTime TO
+            planeVelocityTime.
+    }.
+
+    IF planeRequiredTime <
+       radialTgoFloor {
+
+        SET planeRequiredTime TO
+            radialTgoFloor.
+    }.
+
+    // Shared constraint horizon.  The radial/plane axes
+    // are never forced to finish faster than the plane can
+    // physically settle.
+
+    SET guidanceTime TO
+        tGo.
+
+    IF planeRequiredTime >
+       guidanceTime {
+
+        SET guidanceTime TO
+            planeRequiredTime.
+    }.
+
+    IF guidanceTime <
+       radialTgoFloor {
+
+        SET guidanceTime TO
+            radialTgoFloor.
+    }.
+
     SET gravityAccel TO
         SHIP:BODY:MU /
         (radiusNow^2).
@@ -1212,12 +1542,6 @@ UNTIL terminalComplete
         (alongVel^2 * TAN(planeAngle) / radiusNow).
 
     IF NOT fineLatched {
-
-        SET guidanceTime TO tGo.
-
-        IF guidanceTime < radialTgoFloor {
-            SET guidanceTime TO radialTgoFloor.
-        }.
 
         SET desiredRadialAccel TO
             (6 * altitudeError / (guidanceTime^2))
@@ -1516,7 +1840,7 @@ UNTIL terminalComplete
         logState("GUIDANCE_TIMEOUT").
     }.
 
-    PRINT "===== SV-5.0.2 TERMINAL =====" AT(0,2).
+    PRINT "===== SV-5.1 TERMINAL =====" AT(0,2).
 
     IF captureActive {
 
@@ -1543,6 +1867,7 @@ UNTIL terminalComplete
     PRINT "CROSS VEL: " + ROUND(crossVel,4) + " m/s      " AT(0,11).
     PRINT "RAD VEL: " + ROUND(radialVel,4) + " m/s      " AT(0,12).
     PRINT "ALONG ERR: " + ROUND(alongError,4) + " m/s      " AT(0,13).
+    PRINT "PLANE TGO: " + ROUND(planeRequiredTime,2) + " s        " AT(0,14).
     PRINT "R ALLOC: " + ROUND(radialAllocAccel,4) + " m/s2     " AT(0,15).
     PRINT "X ALLOC: " + ROUND(crossAllocAccel,4) + " m/s2     " AT(0,16).
     PRINT "A ALLOC: " + ROUND(alongAllocAccel,4) + " m/s2     " AT(0,17).
@@ -1581,6 +1906,9 @@ UNTIL terminalComplete
             ROUND(circularVelNow,5) + "," +
             ROUND(alongError,5) + "," +
             ROUND(tGo,5) + "," +
+            ROUND(planeRequiredTime,5) + "," +
+            ROUND(guidanceTime,5) + "," +
+            planeReadyForFine + "," +
             ROUND(naturalRadialAccel,5) + "," +
             ROUND(naturalCrossAccel,5) + "," +
             ROUND(radialReqAccel,5) + "," +
@@ -1606,7 +1934,7 @@ UNTIL terminalComplete
 
     IF MISSIONTIME - lastFlightLog >= 0.5 {
 
-        logState("SV502_GUIDANCE").
+        logState("SV51_GUIDANCE").
         SET lastFlightLog TO MISSIONTIME.
     }.
 
@@ -1645,7 +1973,7 @@ IF finalAlongVec:MAG > 0.000001 {
 
 WAIT 0.25.
 
-logState("SV502_CUTOFF").
+logState("SV51_CUTOFF").
 
 UNLOCK STEERING.
 
@@ -1661,7 +1989,7 @@ SET finalPeError TO orbitTarget - finalPe.
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.0.2 GUIDANCE COMPLETE =====".
+PRINT "===== SV-5.1 GUIDANCE COMPLETE =====".
 PRINT "".
 PRINT "Target:         " + ROUND(orbitTarget/1000,2) + " km @ " + ROUND(targetInclination,3) + " deg".
 PRINT "".
@@ -1684,9 +2012,9 @@ IF terminalComplete {
 
 PRINT "".
 PRINT "FLIGHT LOG:".
-PRINT "0:/sv502flight.csv".
+PRINT "0:/sv51flight.csv".
 PRINT "".
 PRINT "GUIDANCE LOG:".
-PRINT "0:/sv502guidance.csv".
+PRINT "0:/sv51guidance.csv".
 
 logState("FINAL").
