@@ -1,5 +1,5 @@
 // ======================================================
-// SV-5.4 MISSION CONFIG
+// SV-5.5 MISSION CONFIG
 // 0.625 m TWO-STAGE LIQUID LAUNCHER
 //
 // CONFIGURABLE:
@@ -9,23 +9,24 @@
 //
 // Derived from successful SV-4.0.1 / SV-3.3 guidance.
 //
-// SV-5.4:
-// - Keeps the inertially frozen target plane.
-// - Removes aggressive ascent cross-plane feedback.
-// - Ascent uses the target-plane tangent plus Kerbin
-//   rotation compensation based on CURRENT horizontal speed.
-// - Phase 1: pure SV-3.x radial/tangential orbit insertion.
-// - Phase 2: throttle-OFF coast while pre-pointing normal.
-// - Plane burn is permitted only after attitude alignment
-//   is held and local node effectiveness is high.
-// - Phase 3: pure radial/tangential cleanup.
-// - Never burns through a large steering slew.
+// SV-5.5:
+// - Returns to a single continuous second-stage burn.
+// - Launch azimuth uses a tunable inertial reference speed
+//   to compensate for Kerbin rotation without oversteering.
+// - Booster follows the target-plane great-circle tangent.
+// - Upper stage flies an inertial in-plane pitch vector.
+// - Small orbital-plane errors are corrected by a LIMITED
+//   normal/yaw trim while the engine is already burning.
+// - Plane trim is capped by yaw angle and can never become
+//   a separate plane-change burn.
+// - Terminal radial/tangential guidance is the proven
+//   SV-3.3 architecture with the small yaw trim layered on.
 //
 // FAIRING MUST BE ON ACTION GROUP 1
 //
 // Logs:
-//   0:/sv54flight.csv
-//   0:/sv54guidance.csv
+//   0:/sv55flight.csv
+//   0:/sv55guidance.csv
 // ======================================================
 
 CLEARSCREEN.
@@ -45,7 +46,7 @@ SET configGui:X TO 50.
 SET configGui:Y TO 80.
 SET configGui:DRAGGABLE TO TRUE.
 
-SET titleLabel TO configGui:ADDLABEL("SV-5.4 LAUNCH GUIDANCE").
+SET titleLabel TO configGui:ADDLABEL("SV-5.5 LAUNCH GUIDANCE").
 SET titleLabel:STYLE:ALIGN TO "CENTER".
 SET titleLabel:STYLE:HSTRETCH TO TRUE.
 
@@ -173,48 +174,32 @@ SET radialTgoFloor TO 4.
 SET radialAccelLimit TO 6.
 
 // ------------------------------------------------------
-// ASCENT PLANE GUIDANCE
+// LAUNCH / PLANE TRIM
 // ------------------------------------------------------
 //
-// No cross-plane dogleg controller in SV-5.4.
-// Follow the fixed target-plane tangent and compensate for
-// Kerbin rotation using the vehicle's CURRENT horizontal
-// inertial speed.  A speed floor avoids pathological
-// headings while horizontal velocity is still tiny.
+// Empirical launch-plane reference speed.
+// Previous tests bracketed the correct 30-deg solution:
+// full circular-speed compensation undershot inclination,
+// while low/current-speed compensation overcorrected.
+// 1800 m/s is the first calibrated midpoint test.
 
-SET ascentMinHorizontalSpeed TO 800.
+SET launchPlaneReferenceSpeed TO 1800.
 
-// ------------------------------------------------------
-// DEDICATED PLANE-CHANGE PHASE
-// ------------------------------------------------------
-//
-// After circular insertion:
-//   1) throttle to zero,
-//   2) point normal / antinormal,
-//   3) wait for a useful node,
-//   4) require stable attitude alignment,
-//   5) burn pure normal,
-//   6) cut off before slewing or leaving the node,
-//   7) clean up Ap/Pe afterward.
+// Small yaw correction during the already-required
+// second-stage burn.  It is never allowed to become a
+// dedicated plane-change maneuver.
 
 SET planeProbeDv TO 1.
+SET planeTrimEffectivenessFloor TO 0.05.
 
-SET planePrepointEffectiveness TO 0.55.
-SET planeIgnitionEffectiveness TO 0.90.
-SET planeAbortEffectiveness TO 0.75.
+SET upperPlaneTrimTimeConstant TO 20.
+SET upperPlaneTrimMaxYaw TO 3.
+SET upperPlaneTrimMaxYawHighQ TO 1.5.
 
-SET planeIgnitionSteerError TO 3.
-SET planeAbortSteerError TO 5.
-SET planeAlignmentHold TO 0.50.
+SET terminalPlaneTrimTimeFloor TO 8.
+SET terminalPlaneTrimMaxYaw TO 3.
 
-SET planeBurnAccelMax TO 6.
-SET planeBurnTimeConstant TO 2.0.
-
-SET planeFineAngle TO 0.05.
-SET planeFineAccelMax TO 1.5.
-SET planeFineTimeConstant TO 4.0.
-
-SET orbitIgnitionSteerError TO 12.
+SET planeResidualReportTolerance TO 0.05.
 
 SET constraintAllocationFraction TO 0.98.
 SET startLeadBias TO 0.8.
@@ -234,7 +219,7 @@ SET originalPitchTS TO STEERINGMANAGER:PITCHTS.
 SET originalYawTS TO STEERINGMANAGER:YAWTS.
 SET steeringFineTuned TO FALSE.
 
-SET terminalMaxTime TO 1800.
+SET terminalMaxTime TO 240.
 SET engineFailureHoldTime TO 2.
 
 // ======================================================
@@ -265,8 +250,8 @@ SET thrustActive TO TRUE.
 // LOG FILES
 // ======================================================
 
-SET flightLog TO "0:/sv54flight.csv".
-SET guidanceLog TO "0:/sv54guidance.csv".
+SET flightLog TO "0:/sv55flight.csv".
+SET guidanceLog TO "0:/sv55guidance.csv".
 
 IF EXISTS(flightLog) {
     DELETEPATH(flightLog).
@@ -281,7 +266,7 @@ LOG
 TO flightLog.
 
 LOG
-"MET,phase,actuator,alt_m,inc_deg,plane_angle_err_deg,plane_dv_est_mps,plane_effectiveness_ratio,steer_err_deg,radial_vel_mps,tangential_vel_mps,circular_vel_mps,tangential_error_mps,tgo_s,natural_radial_accel,radial_req_accel,tangential_req_accel,radial_alloc_accel,tangential_alloc_accel,max_accel,command_accel,throttle,ap_m,pe_m,ap_error_m,pe_error_m,fine_latched,orbit_capture,plane_capture"
+"MET,mode,actuator,alt_m,inc_deg,plane_angle_err_deg,plane_effectiveness_ratio,plane_trim_accel_mps2,plane_trim_yaw_deg,radial_vel_mps,tangential_vel_mps,circular_vel_mps,tangential_error_mps,tgo_s,natural_radial_accel,radial_req_accel,tangential_req_accel,radial_alloc_accel,tangential_alloc_accel,max_accel,base_command_accel,total_command_accel,throttle,ap_m,pe_m,ap_error_m,pe_error_m,fine_latched,capture,steer_angle_err_deg"
 TO guidanceLog.
 
 // ======================================================
@@ -668,22 +653,13 @@ SET launchAlongHat TO launchAlongVec:NORMALIZED.
 // rotational frame velocity before deriving the heading.
 // ======================================================
 
-SET targetCircularSpeedRef TO
-    SQRT(
-        SHIP:BODY:MU /
-        (
-            SHIP:BODY:RADIUS +
-            orbitTarget
-        )
-    ).
-
 SET launchRotationVel TO
     SHIP:VELOCITY:ORBIT -
     SHIP:VELOCITY:SURFACE.
 
 SET desiredLaunchInertialVel TO
     launchAlongHat *
-    targetCircularSpeedRef.
+    launchPlaneReferenceSpeed.
 
 SET desiredLaunchSurfaceVel TO
     desiredLaunchInertialVel -
@@ -740,7 +716,7 @@ SET guidanceAzimuth TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.4 MISSION =====".
+PRINT "===== SV-5.5 MISSION =====".
 PRINT "".
 PRINT "TARGET ALT: " + ROUND(orbitTarget / 1000,2) + " km".
 PRINT "TARGET INC: " + ROUND(targetInclination,3) + " deg".
@@ -818,8 +794,8 @@ UNTIL boosterBurnout {
     //
     // Diagnostics still measure geometric plane position
     // and cross-plane velocity, but they do NOT command a
-    // dogleg.  Residual inclination is handled later as a
-    // dedicated orbital plane change.
+    // dogleg.  Residual error is trimmed gently during the
+    // powered upper-stage / terminal burn.
 
     SET planeOrbitVel TO
         SHIP:VELOCITY:ORBIT.
@@ -892,19 +868,9 @@ UNTIL boosterBurnout {
             ascentCrossAxis
         ).
 
-    SET ascentGuidanceSpeed TO
-        planeHorizontalSpeed.
-
-    IF ascentGuidanceSpeed <
-       ascentMinHorizontalSpeed {
-
-        SET ascentGuidanceSpeed TO
-            ascentMinHorizontalSpeed.
-    }.
-
     SET desiredPlaneInertialVel TO
         planeAlongHat *
-        ascentGuidanceSpeed.
+        launchPlaneReferenceSpeed.
 
     SET planeRotationVel TO
         SHIP:VELOCITY:ORBIT -
@@ -1123,6 +1089,10 @@ logState("UPPER_ENGINE_READY").
 
 // ======================================================
 // UPPER-STAGE ASCENT
+//
+// Inertial target-plane pitch guidance + small normal trim.
+// The trim is a yaw bias on an existing powered burn,
+// never an independent plane-change command.
 // ======================================================
 
 CLEARSCREEN.
@@ -1131,18 +1101,16 @@ SET lastLog TO MISSIONTIME.
 
 UNTIL ascentDone {
 
-    SET surfSpd TO SHIP:VELOCITY:SURFACE:MAG.
-    SET fpa TO 0.
+    SET surfSpd TO
+        SHIP:VELOCITY:SURFACE:MAG.
 
-    // Continue following the target inertial plane as the
-    // great-circle course changes with position.
+    SET fpa TO 0.
 
     SET targetPlaneNormal TO
         targetPlaneNow().
 
-    SET planeUp TO SHIP:UP:VECTOR.
-    SET planeNorth TO SHIP:NORTH:VECTOR.
-    SET planeEast TO HEADING(90,0):VECTOR.
+    SET planeUp TO
+        SHIP:UP:VECTOR.
 
     SET planeAlongVec TO
         VCRS(
@@ -1152,699 +1120,43 @@ UNTIL ascentDone {
         *
         alongCrossSign.
 
-    IF planeAlongVec:MAG < 0.000001 {
-        SET planeAlongVec TO launchAlongHat.
+    IF planeAlongVec:MAG <
+       0.000001 {
+
+        SET planeAlongVec TO
+            launchAlongHat.
     }.
 
     SET planeAlongHat TO
         planeAlongVec:NORMALIZED.
 
-    // --------------------------------------------------
-    // NOMINAL TARGET-PLANE TANGENT
-    // --------------------------------------------------
-    //
-    // Diagnostics still measure geometric plane position
-    // and cross-plane velocity, but they do NOT command a
-    // dogleg.  Residual inclination is handled later as a
-    // dedicated orbital plane change.
-
-    SET planeOrbitVel TO
+    SET orbitVelVec TO
         SHIP:VELOCITY:ORBIT.
 
-    SET planeRadialVel TO
+    SET radialVel TO
         VDOT(
-            planeOrbitVel,
+            orbitVelVec,
             planeUp
         ).
 
-    SET planeHorizontalVel TO
-        planeOrbitVel -
-        (
-            planeUp *
-            planeRadialVel
-        ).
-
-    SET planeHorizontalSpeed TO
-        planeHorizontalVel:MAG.
-
-    SET planePositionDot TO
-        VDOT(
-            planeUp,
-            targetPlaneNormal
-        ).
-
-    IF planePositionDot > 1 {
-        SET planePositionDot TO 1.
-    }.
-
-    IF planePositionDot < -1 {
-        SET planePositionDot TO -1.
-    }.
-
-    SET ascentPlaneAngle TO
-        ARCSIN(
-            planePositionDot
-        ).
-
-    SET ascentPlaneErrorM TO
-        (
-            SHIP:BODY:RADIUS +
-            SHIP:ALTITUDE
-        )
-        *
-        ascentPlaneAngle
-        *
-        CONSTANT:DEGTORAD.
-
-    SET ascentCrossAxis TO
-        targetPlaneNormal -
-        (
-            planeUp *
-            planePositionDot
-        ).
-
-    IF ascentCrossAxis:MAG <
-       0.000001 {
-
-        SET ascentCrossAxis TO
-            targetPlaneNormal.
-    }.
-
-    SET ascentCrossAxis TO
-        ascentCrossAxis:NORMALIZED.
-
-    SET ascentCrossVel TO
-        VDOT(
-            planeOrbitVel,
-            ascentCrossAxis
-        ).
-
-    SET ascentGuidanceSpeed TO
-        planeHorizontalSpeed.
-
-    IF ascentGuidanceSpeed <
-       ascentMinHorizontalSpeed {
-
-        SET ascentGuidanceSpeed TO
-            ascentMinHorizontalSpeed.
-    }.
-
-    SET desiredPlaneInertialVel TO
-        planeAlongHat *
-        ascentGuidanceSpeed.
-
-    SET planeRotationVel TO
-        SHIP:VELOCITY:ORBIT -
-        SHIP:VELOCITY:SURFACE.
-
-    SET desiredPlaneSurfaceVel TO
-        desiredPlaneInertialVel -
-        planeRotationVel.
-
-    SET desiredPlaneSurfaceVel TO
-        desiredPlaneSurfaceVel -
-        (
-            planeUp *
-            VDOT(
-                desiredPlaneSurfaceVel,
-                planeUp
-            )
-        ).
-
-    IF desiredPlaneSurfaceVel:MAG >
-       0.000001 {
-
-        SET desiredPlaneSurfaceHat TO
-            desiredPlaneSurfaceVel:NORMALIZED.
-
-        SET planeNorthComponent TO
-            VDOT(
-                desiredPlaneSurfaceHat,
-                planeNorth
-            ).
-
-        SET planeEastComponent TO
-            VDOT(
-                desiredPlaneSurfaceHat,
-                planeEast
-            ).
-
-        SET guidanceAzimuth TO
-            ARCTAN2(
-                planeEastComponent,
-                planeNorthComponent
-            ).
-
-        IF guidanceAzimuth < 0 {
-
-            SET guidanceAzimuth TO
-                guidanceAzimuth +
-                360.
-        }.
-    }.
-
-    IF surfSpd > 1 {
-
-        SET fpaRatio TO
-            SHIP:VERTICALSPEED /
-            surfSpd.
-
-        IF fpaRatio > 1 {
-            SET fpaRatio TO 1.
-        }.
-
-        IF fpaRatio < -1 {
-            SET fpaRatio TO -1.
-        }.
-
-        SET fpa TO ARCSIN(fpaRatio).
-    }.
-
-    IF SHIP:Q > 0.015 {
-
-        SET pitchCmd TO fpa.
-
-        LOCK STEERING TO
-            HEADING(
-                guidanceAzimuth,
-                pitchCmd
-            ).
-
-    } ELSE {
-
-        SET etaError TO etaTarget - ETA:APOAPSIS.
-        SET pitchOffset TO etaError * 0.20.
-
-        IF pitchOffset < -10 {
-            SET pitchOffset TO -10.
-        }.
-
-        IF pitchOffset > 10 {
-            SET pitchOffset TO 10.
-        }.
-
-        SET pitchCmd TO fpa + pitchOffset.
-
-        IF pitchCmd < 0 {
-            SET pitchCmd TO 0.
-        }.
-
-        IF pitchCmd > 45 {
-            SET pitchCmd TO 45.
-        }.
-
-        IF SHIP:OBT:APOAPSIS < 60000
-           AND pitchCmd < 12 {
-
-            SET pitchCmd TO 12.
-        }.
-
-        IF SHIP:OBT:APOAPSIS >= 60000
-           AND SHIP:OBT:APOAPSIS < 70000
-           AND pitchCmd < 6 {
-
-            SET pitchCmd TO 6.
-        }.
-
-        LOCK STEERING TO
-            HEADING(
-                guidanceAzimuth,
-                pitchCmd
-            ).
-    }.
-
-    SET throttleCmd TO 1.
-
-    IF SHIP:Q > 0.05 {
-
-        SET throttleCmd TO 0.35.
-
-    } ELSE IF SHIP:Q > 0.03 {
-
-        SET throttleCmd TO 0.50.
-
-    } ELSE IF SHIP:Q > 0.015 {
-
-        SET throttleCmd TO 0.70.
-    }.
-
-    SET apReserve TO SHIP:Q * 20000.
-
-    IF apReserve > 750 {
-        SET apReserve TO 750.
-    }.
-
-    IF apReserve < 0 {
-        SET apReserve TO 0.
-    }.
-
-    SET cutoffApTarget TO orbitTarget + apReserve.
-    SET apError TO cutoffApTarget - SHIP:OBT:APOAPSIS.
-
-    IF apError < 3000
-       AND throttleCmd > 0.55 {
-
-        SET throttleCmd TO 0.55.
-    }.
-
-    IF apError < 1200
-       AND throttleCmd > 0.30 {
-
-        SET throttleCmd TO 0.30.
-    }.
-
-    IF apError < 400
-       AND throttleCmd > 0.15 {
-
-        SET throttleCmd TO 0.15.
-    }.
-
-    LOCK THROTTLE TO throttleCmd.
-    checkFairing().
-
-    IF SHIP:OBT:APOAPSIS >= cutoffApTarget {
-
-        SET ascentDone TO TRUE.
-        SET throttleCmd TO 0.
-        LOCK THROTTLE TO throttleCmd.
-        logState("ASCENT_CUTOFF").
-    }.
-
-    PRINT "UPPER-STAGE ASCENT     " AT(0,6).
-    PRINT "ALT: " + ROUND(SHIP:ALTITUDE/1000,2) + " km       " AT(0,9).
-    PRINT "AP: " + ROUND(SHIP:OBT:APOAPSIS/1000,2) + " km       " AT(0,10).
-    PRINT "TARGET: " + ROUND(orbitTarget/1000,2) + " km       " AT(0,11).
-    PRINT "ETA AP: " + ROUND(ETA:APOAPSIS,1) + " s        " AT(0,12).
-    PRINT "INC: " + ROUND(SHIP:OBT:INCLINATION,3) + " deg      " AT(0,13).
-    PRINT "PLN: " + ROUND(ascentPlaneErrorM,1) + " m       " AT(0,14).
-    PRINT "XVEL: " + ROUND(ascentCrossVel,1) + " m/s      " AT(0,15).
-    PRINT "THR: " + ROUND(throttleCmd,3) + "          " AT(0,16).
-
-    IF MISSIONTIME - lastLog >= 0.25 {
-
-        logState("UPPER_ASCENT").
-        SET lastLog TO MISSIONTIME.
-    }.
-
-    WAIT 0.02.
-}.
-
-// ======================================================
-// COAST TO NEAR VACUUM
-// ======================================================
-
-SET throttleCmd TO 0.
-
-LOCK THROTTLE TO throttleCmd.
-LOCK STEERING TO PROGRADE.
-
-CLEARSCREEN.
-
-PRINT "===== ASCENT COMPLETE =====".
-PRINT "".
-PRINT "COASTING TO TERMINAL GUIDANCE".
-
-SET lastLog TO MISSIONTIME.
-
-UNTIL SHIP:ALTITUDE >= 60000
-      AND SHIP:Q <= 0.0005 {
-
-    checkFairing().
-
-    IF MISSIONTIME - lastLog >= 0.5 {
-
-        logState("ATMOSPHERIC_COAST").
-        SET lastLog TO MISSIONTIME.
-    }.
-
-    PRINT "ALT: " + ROUND(SHIP:ALTITUDE/1000,2) + " km       " AT(0,8).
-    PRINT "AP: " + ROUND(SHIP:OBT:APOAPSIS/1000,3) + " km       " AT(0,9).
-    PRINT "INC: " + ROUND(SHIP:OBT:INCLINATION,4) + " deg      " AT(0,10).
-    PRINT "ETA AP: " + ROUND(ETA:APOAPSIS,1) + " s        " AT(0,11).
-
-    WAIT 0.05.
-}.
-
-checkFairing().
-logState("NEAR_VACUUM").
-
-// ======================================================
-// ENGINE PERFORMANCE
-// ======================================================
-
-LIST ENGINES IN engineList.
-
-SET totalMassFlow TO 0.
-SET effectiveISP TO 0.
-
-FOR eng IN engineList {
-
-    IF eng:IGNITION
-       AND NOT eng:FLAMEOUT {
-
-        SET oneMassFlow TO
-            eng:AVAILABLETHRUST /
-            (eng:ISP * CONSTANT:g0).
-
-        SET totalMassFlow TO
-            totalMassFlow +
-            oneMassFlow.
-    }.
-}.
-
-IF totalMassFlow > 0 {
-
-    SET effectiveISP TO
-        SHIP:AVAILABLETHRUST /
-        (totalMassFlow * CONSTANT:g0).
-}.
-
-SET exhaustVelocity TO
-    effectiveISP *
-    CONSTANT:g0.
-
-// ======================================================
-// TERMINAL ACQUISITION
-//
-// Plane change is intentionally excluded from insertion
-// timing.  First establish a circular orbit in the plane
-// produced by ascent.
-// ======================================================
-
-CLEARSCREEN.
-
-PRINT "===== SV-5.4 ACQUISITION =====".
-
-SET terminalStart TO FALSE.
-SET lastLog TO MISSIONTIME.
-
-UNTIL terminalStart {
-
-    SET rHat TO
-        SHIP:UP:VECTOR.
-
-    SET orbitVelVec TO
-        SHIP:VELOCITY:ORBIT.
-
-    SET radialVel TO
-        VDOT(
-            orbitVelVec,
-            rHat
-        ).
-
     SET tangentialVelVec TO
         orbitVelVec -
         (
-            rHat *
+            planeUp *
             radialVel
         ).
 
     SET tangentialVel TO
         tangentialVelVec:MAG.
 
-    SET radiusNow TO
-        SHIP:BODY:RADIUS +
-        SHIP:ALTITUDE.
-
-    SET circularVelNow TO
-        SQRT(
-            SHIP:BODY:MU /
-            radiusNow
-        ).
-
-    SET tangentialError TO
-        circularVelNow -
-        tangentialVel.
-
-    SET dvEstimate TO
-        SQRT(
-            tangentialError^2 +
-            radialVel^2
-        ).
-
-    SET burnEstimate TO 0.
-    SET halfDvLead TO 0.
-
-    IF dvEstimate > 0
-       AND totalMassFlow > 0 {
-
-        SET finalMassEstimate TO
-            SHIP:MASS /
-            (
-                CONSTANT:e ^
-                (
-                    dvEstimate /
-                    exhaustVelocity
-                )
-            ).
-
-        SET burnEstimate TO
-            (
-                SHIP:MASS -
-                finalMassEstimate
-            )
-            /
-            totalMassFlow.
-
-        SET halfDvMass TO
-            SHIP:MASS /
-            (
-                CONSTANT:e ^
-                (
-                    0.5 *
-                    dvEstimate /
-                    exhaustVelocity
-                )
-            ).
-
-        SET halfDvLead TO
-            (
-                SHIP:MASS -
-                halfDvMass
-            )
-            /
-            totalMassFlow.
-    }.
-
-    SET startLead TO
-        halfDvLead +
-        startLeadBias.
-
-    PRINT "INC: " +
-        ROUND(
-            SHIP:OBT:INCLINATION,
-            5
-        ) +
-        " deg      "
-        AT(0,6).
-
-    PRINT "RAD VEL: " +
-        ROUND(
-            radialVel,
-            2
-        ) +
-        " m/s      "
-        AT(0,7).
-
-    PRINT "TAN ERR: " +
-        ROUND(
-            tangentialError,
-            1
-        ) +
-        " m/s      "
-        AT(0,8).
-
-    PRINT "FULL BURN: " +
-        ROUND(
-            burnEstimate,
-            2
-        ) +
-        " s        "
-        AT(0,10).
-
-    PRINT "START LEAD: " +
-        ROUND(
-            startLead,
-            2
-        ) +
-        " s        "
-        AT(0,11).
-
-    PRINT "ETA AP: " +
-        ROUND(
-            ETA:APOAPSIS,
-            2
-        ) +
-        " s        "
-        AT(0,12).
-
-    IF ETA:APOAPSIS <=
-       startLead {
-
-        SET terminalStart TO TRUE.
-    }.
-
-    IF MISSIONTIME -
-       lastLog >= 0.5 {
-
-        logState(
-            "TERMINAL_COAST"
-        ).
-
-        SET lastLog TO
-            MISSIONTIME.
-    }.
-
-    WAIT 0.02.
-}.
-
-// ======================================================
-// SV-5.4 PHASED TERMINAL GUIDANCE
-//
-//   INSERTION
-//       Pure radial/tangential circularization.
-//
-//   PLANE_COAST
-//       Engine OFF.  Point normal/antinormal and wait.
-//
-//   PLANE_BURN
-//       Pure normal burn.  Ignition requires node quality
-//       and a stable pre-pointed attitude.
-//
-//   CLEANUP
-//       Pure radial/tangential precision cleanup.
-// ======================================================
-
-CLEARSCREEN.
-
-PRINT "===== SV-5.4 TERMINAL =====".
-
-SET terminalStartMET TO
-    MISSIONTIME.
-
-SET missionPhase TO
-    "INSERTION".
-
-SET orbitCaptureActive TO
-    FALSE.
-
-SET orbitCaptureStartMET TO
-    0.
-
-SET planeCaptureActive TO
-    FALSE.
-
-SET planeCaptureStartMET TO
-    0.
-
-SET planeAlignedStartMET TO
-    -1.
-
-SET throttleCmd TO 0.
-
-SET thrustActive TO TRUE.
-
-SET steeringTargetVec TO
-    SHIP:PROGRADE:VECTOR.
-
-LOCK STEERING TO
-    steeringTargetVec.
-
-LOCK THROTTLE TO
-    throttleCmd.
-
-SET lastFlightLog TO
-    MISSIONTIME.
-
-SET lastGuidanceLog TO
-    MISSIONTIME.
-
-UNTIL terminalComplete
-      OR terminalFailed {
-
     // --------------------------------------------------
-    // CURRENT ORBIT STATE
-    // --------------------------------------------------
-
-    SET targetPlaneNormal TO
-        targetPlaneNow().
-
-    SET rHat TO
-        SHIP:UP:VECTOR.
-
-    SET orbitVelVec TO
-        SHIP:VELOCITY:ORBIT.
-
-    SET radialVel TO
-        VDOT(
-            orbitVelVec,
-            rHat
-        ).
-
-    SET tangentialVelVec TO
-        orbitVelVec -
-        (
-            rHat *
-            radialVel
-        ).
-
-    SET tangentialVel TO
-        tangentialVelVec:MAG.
-
-    IF tangentialVel > 1 {
-
-        SET tangentialUnit TO
-            tangentialVelVec:NORMALIZED.
-
-    } ELSE {
-
-        SET tangentialUnit TO
-            SHIP:PROGRADE:VECTOR.
-    }.
-
-    SET radiusNow TO
-        SHIP:BODY:RADIUS +
-        SHIP:ALTITUDE.
-
-    SET altitudeError TO
-        orbitTarget -
-        SHIP:ALTITUDE.
-
-    SET circularVelNow TO
-        SQRT(
-            SHIP:BODY:MU /
-            radiusNow
-        ).
-
-    SET tangentialError TO
-        circularVelNow -
-        tangentialVel.
-
-    SET currentAp TO
-        SHIP:OBT:APOAPSIS.
-
-    SET currentPe TO
-        SHIP:OBT:PERIAPSIS.
-
-    SET currentInclination TO
-        SHIP:OBT:INCLINATION.
-
-    SET apOrbitError TO
-        orbitTarget -
-        currentAp.
-
-    SET peOrbitError TO
-        orbitTarget -
-        currentPe.
-
-    // --------------------------------------------------
-    // TARGET-PLANE / NODE STATE
+    // CURRENT ORBITAL-PLANE ERROR
     // --------------------------------------------------
 
     SET currentNormalVec TO
         VCRS(
             orbitVelVec,
-            rHat
+            planeUp
         ).
 
     IF currentNormalVec:MAG >
@@ -1882,9 +1194,8 @@ UNTIL terminalComplete
             2
         ).
 
-    // Probe +normal and -normal by 1 m/s.  This gives both
-    // the correct burn sign and a local node-effectiveness
-    // estimate without assuming where the node is.
+    // Probe +/- current orbit normal to select the yaw
+    // direction that locally reduces target-plane error.
 
     SET plusProbeVel TO
         orbitVelVec +
@@ -1896,7 +1207,7 @@ UNTIL terminalComplete
     SET plusProbeNormal TO
         VCRS(
             plusProbeVel,
-            rHat
+            planeUp
         ).
 
     IF plusProbeNormal:MAG >
@@ -1936,7 +1247,7 @@ UNTIL terminalComplete
     SET minusProbeNormal TO
         VCRS(
             minusProbeVel,
-            rHat
+            planeUp
         ).
 
     IF minusProbeNormal:MAG >
@@ -2021,25 +1332,928 @@ UNTIL terminalComplete
         SET planeEffectivenessRatio TO 0.
     }.
 
-    SET localPlaneDvEstimate TO
-        planeDvEstimate.
+    // --------------------------------------------------
+    // PITCH / APOAPSIS GUIDANCE
+    // --------------------------------------------------
 
-    IF planeImprovementPerDv >
-       0.0000001 {
+    IF surfSpd > 1 {
 
-        SET localPlaneDvEstimate TO
-            planeAngleError /
-            planeImprovementPerDv.
+        SET fpaRatio TO
+            SHIP:VERTICALSPEED /
+            surfSpd.
+
+        IF fpaRatio > 1 {
+            SET fpaRatio TO 1.
+        }.
+
+        IF fpaRatio < -1 {
+            SET fpaRatio TO -1.
+        }.
+
+        SET fpa TO
+            ARCSIN(
+                fpaRatio
+            ).
+    }.
+
+    IF SHIP:Q > 0.015 {
+
+        SET pitchCmd TO fpa.
+
+    } ELSE {
+
+        SET etaError TO
+            etaTarget -
+            ETA:APOAPSIS.
+
+        SET pitchOffset TO
+            etaError *
+            0.20.
+
+        IF pitchOffset < -10 {
+            SET pitchOffset TO -10.
+        }.
+
+        IF pitchOffset > 10 {
+            SET pitchOffset TO 10.
+        }.
+
+        SET pitchCmd TO
+            fpa +
+            pitchOffset.
+
+        IF pitchCmd < 0 {
+            SET pitchCmd TO 0.
+        }.
+
+        IF pitchCmd > 45 {
+            SET pitchCmd TO 45.
+        }.
+
+        IF SHIP:OBT:APOAPSIS <
+           60000
+           AND
+           pitchCmd < 12 {
+
+            SET pitchCmd TO 12.
+        }.
+
+        IF SHIP:OBT:APOAPSIS >=
+           60000
+           AND
+           SHIP:OBT:APOAPSIS <
+           70000
+           AND
+           pitchCmd < 6 {
+
+            SET pitchCmd TO 6.
+        }.
     }.
 
     // --------------------------------------------------
-    // RADIAL / TANGENTIAL ORBIT GUIDANCE
+    // THROTTLE / APOAPSIS CUTOFF
+    // --------------------------------------------------
+
+    SET throttleCmd TO 1.
+
+    IF SHIP:Q > 0.05 {
+
+        SET throttleCmd TO 0.35.
+
+    } ELSE IF SHIP:Q > 0.03 {
+
+        SET throttleCmd TO 0.50.
+
+    } ELSE IF SHIP:Q > 0.015 {
+
+        SET throttleCmd TO 0.70.
+    }.
+
+    SET apReserve TO
+        SHIP:Q *
+        20000.
+
+    IF apReserve > 750 {
+        SET apReserve TO 750.
+    }.
+
+    IF apReserve < 0 {
+        SET apReserve TO 0.
+    }.
+
+    SET cutoffApTarget TO
+        orbitTarget +
+        apReserve.
+
+    SET apError TO
+        cutoffApTarget -
+        SHIP:OBT:APOAPSIS.
+
+    IF apError < 3000
+       AND
+       throttleCmd > 0.55 {
+
+        SET throttleCmd TO 0.55.
+    }.
+
+    IF apError < 1200
+       AND
+       throttleCmd > 0.30 {
+
+        SET throttleCmd TO 0.30.
+    }.
+
+    IF apError < 400
+       AND
+       throttleCmd > 0.15 {
+
+        SET throttleCmd TO 0.15.
+    }.
+
+    // --------------------------------------------------
+    // INERTIAL IN-PLANE STEERING + LIMITED YAW TRIM
+    // --------------------------------------------------
+
+    SET baseDir TO
+        (
+            planeAlongHat *
+            COS(
+                pitchCmd
+            )
+        )
+        +
+        (
+            planeUp *
+            SIN(
+                pitchCmd
+            )
+        ).
+
+    SET baseDir TO
+        baseDir:NORMALIZED.
+
+    SET maxAccel TO
+        SHIP:AVAILABLETHRUST /
+        SHIP:MASS.
+
+    SET poweredAccel TO
+        maxAccel *
+        throttleCmd.
+
+    SET requestedPlaneAccel TO 0.
+
+    IF planeAngleError >
+       0.000001
+       AND
+       planeEffectivenessRatio >=
+       planeTrimEffectivenessFloor {
+
+        SET requestedPlaneAccel TO
+            (
+                planeDvEstimate /
+                upperPlaneTrimTimeConstant
+            )
+            *
+            planeEffectivenessRatio.
+    }.
+
+    SET activePlaneYawLimit TO
+        upperPlaneTrimMaxYaw.
+
+    IF SHIP:Q > 0.015 {
+
+        SET activePlaneYawLimit TO
+            upperPlaneTrimMaxYawHighQ.
+    }.
+
+    SET maxPlaneAccelByYaw TO
+        poweredAccel *
+        TAN(
+            activePlaneYawLimit
+        ).
+
+    SET planeTrimAccel TO
+        requestedPlaneAccel.
+
+    IF planeTrimAccel >
+       maxPlaneAccelByYaw {
+
+        SET planeTrimAccel TO
+            maxPlaneAccelByYaw.
+    }.
+
+    IF planeTrimAccel < 0 {
+        SET planeTrimAccel TO 0.
+    }.
+
+    SET desiredSteeringVec TO
+        (
+            baseDir *
+            poweredAccel
+        )
+        +
+        (
+            planeCorrectionUnit *
+            planeTrimAccel
+        ).
+
+    IF desiredSteeringVec:MAG >
+       0.000001 {
+
+        LOCK STEERING TO
+            desiredSteeringVec.
+
+    } ELSE {
+
+        LOCK STEERING TO
+            baseDir.
+    }.
+
+    LOCK THROTTLE TO
+        throttleCmd.
+
+    checkFairing().
+
+    IF SHIP:OBT:APOAPSIS >=
+       cutoffApTarget {
+
+        SET ascentDone TO TRUE.
+
+        SET throttleCmd TO 0.
+
+        LOCK THROTTLE TO
+            throttleCmd.
+
+        logState(
+            "ASCENT_CUTOFF"
+        ).
+    }.
+
+    SET actualTrimYaw TO 0.
+
+    IF poweredAccel > 0 {
+
+        SET actualTrimYaw TO
+            ARCTAN2(
+                planeTrimAccel,
+                poweredAccel
+            ).
+    }.
+
+    PRINT
+        "UPPER-STAGE ASCENT     "
+        AT(0,6).
+
+    PRINT
+        "ALT: " +
+        ROUND(
+            SHIP:ALTITUDE/1000,
+            2
+        ) +
+        " km       "
+        AT(0,9).
+
+    PRINT
+        "AP: " +
+        ROUND(
+            SHIP:OBT:APOAPSIS/1000,
+            2
+        ) +
+        " km       "
+        AT(0,10).
+
+    PRINT
+        "INC: " +
+        ROUND(
+            SHIP:OBT:INCLINATION,
+            4
+        ) +
+        " deg      "
+        AT(0,11).
+
+    PRINT
+        "PLANE: " +
+        ROUND(
+            planeAngleError,
+            4
+        ) +
+        " deg      "
+        AT(0,12).
+
+    PRINT
+        "YAW TRIM: " +
+        ROUND(
+            actualTrimYaw,
+            3
+        ) +
+        " deg      "
+        AT(0,13).
+
+    PRINT
+        "EFF: " +
+        ROUND(
+            planeEffectivenessRatio,
+            3
+        ) +
+        "          "
+        AT(0,14).
+
+    PRINT
+        "ETA AP: " +
+        ROUND(
+            ETA:APOAPSIS,
+            1
+        ) +
+        " s        "
+        AT(0,15).
+
+    PRINT
+        "THR: " +
+        ROUND(
+            throttleCmd,
+            3
+        ) +
+        "          "
+        AT(0,16).
+
+    IF MISSIONTIME -
+       lastLog >= 0.25 {
+
+        logState(
+            "UPPER_ASCENT"
+        ).
+
+        SET lastLog TO
+            MISSIONTIME.
+    }.
+
+    WAIT 0.02.
+}.
+
+// ======================================================
+// COAST TO NEAR VACUUM
+// ======================================================
+
+SET throttleCmd TO 0.
+
+LOCK THROTTLE TO throttleCmd.
+LOCK STEERING TO PROGRADE.
+
+CLEARSCREEN.
+
+PRINT "===== ASCENT COMPLETE =====".
+PRINT "".
+PRINT "COASTING TO TERMINAL GUIDANCE".
+
+SET lastLog TO MISSIONTIME.
+
+UNTIL SHIP:ALTITUDE >= 60000
+      AND SHIP:Q <= 0.0005 {
+
+    checkFairing().
+
+    IF MISSIONTIME - lastLog >= 0.5 {
+
+        logState("ATMOSPHERIC_COAST").
+        SET lastLog TO MISSIONTIME.
+    }.
+
+    PRINT "ALT: " + ROUND(SHIP:ALTITUDE/1000,2) + " km       " AT(0,8).
+    PRINT "AP: " + ROUND(SHIP:OBT:APOAPSIS/1000,3) + " km       " AT(0,9).
+    PRINT "INC: " + ROUND(SHIP:OBT:INCLINATION,4) + " deg      " AT(0,10).
+    PRINT "ETA AP: " + ROUND(ETA:APOAPSIS,1) + " s        " AT(0,11).
+
+    WAIT 0.05.
+}.
+
+checkFairing().
+logState("NEAR_VACUUM").
+
+// ======================================================
+// ENGINE PERFORMANCE
+// ======================================================
+
+LIST ENGINES IN engineList.
+
+SET totalMassFlow TO 0.
+SET effectiveISP TO 0.
+
+FOR eng IN engineList {
+
+    IF eng:IGNITION
+       AND NOT eng:FLAMEOUT {
+
+        SET oneMassFlow TO
+            eng:AVAILABLETHRUST /
+            (eng:ISP * CONSTANT:g0).
+
+        SET totalMassFlow TO
+            totalMassFlow +
+            oneMassFlow.
+    }.
+}.
+
+IF totalMassFlow > 0 {
+
+    SET effectiveISP TO
+        SHIP:AVAILABLETHRUST /
+        (totalMassFlow * CONSTANT:g0).
+}.
+
+SET exhaustVelocity TO
+    effectiveISP *
+    CONSTANT:g0.
+
+// ======================================================
+// TERMINAL ACQUISITION
+//
+// Same timing architecture as the successful SV-3.3
+// branch.  Plane error does not alter burn timing.
+// ======================================================
+
+CLEARSCREEN.
+
+PRINT "===== SV-5.5 ACQUISITION =====".
+
+SET terminalStart TO FALSE.
+SET lastLog TO MISSIONTIME.
+
+UNTIL terminalStart {
+
+    SET upVec TO
+        SHIP:UP:VECTOR.
+
+    SET orbitVelVec TO
+        SHIP:VELOCITY:ORBIT.
+
+    SET radialVel TO
+        VDOT(
+            orbitVelVec,
+            upVec
+        ).
+
+    SET tangentialVelVec TO
+        orbitVelVec -
+        (
+            upVec *
+            radialVel
+        ).
+
+    SET tangentialVel TO
+        tangentialVelVec:MAG.
+
+    SET radiusNow TO
+        SHIP:BODY:RADIUS +
+        SHIP:ALTITUDE.
+
+    SET circularVelNow TO
+        SQRT(
+            SHIP:BODY:MU /
+            radiusNow
+        ).
+
+    SET tangentialError TO
+        circularVelNow -
+        tangentialVel.
+
+    SET dvEstimate TO
+        SQRT(
+            tangentialError^2 +
+            radialVel^2
+        ).
+
+    SET burnEstimate TO 0.
+    SET halfDvLead TO 0.
+
+    IF dvEstimate > 0
+       AND totalMassFlow > 0 {
+
+        SET finalMassEstimate TO
+            SHIP:MASS /
+            (
+                CONSTANT:e ^
+                (
+                    dvEstimate /
+                    exhaustVelocity
+                )
+            ).
+
+        SET burnEstimate TO
+            (
+                SHIP:MASS -
+                finalMassEstimate
+            )
+            /
+            totalMassFlow.
+
+        SET halfDvMass TO
+            SHIP:MASS /
+            (
+                CONSTANT:e ^
+                (
+                    0.5 *
+                    dvEstimate /
+                    exhaustVelocity
+                )
+            ).
+
+        SET halfDvLead TO
+            (
+                SHIP:MASS -
+                halfDvMass
+            )
+            /
+            totalMassFlow.
+    }.
+
+    SET startLead TO
+        halfDvLead +
+        startLeadBias.
+
+    PRINT
+        "ALT: " +
+        ROUND(
+            SHIP:ALTITUDE/1000,
+            3
+        ) +
+        " km      "
+        AT(0,6).
+
+    PRINT
+        "INC: " +
+        ROUND(
+            SHIP:OBT:INCLINATION,
+            5
+        ) +
+        " deg      "
+        AT(0,7).
+
+    PRINT
+        "RAD VEL: " +
+        ROUND(
+            radialVel,
+            2
+        ) +
+        " m/s     "
+        AT(0,8).
+
+    PRINT
+        "TAN ERR: " +
+        ROUND(
+            tangentialError,
+            1
+        ) +
+        " m/s     "
+        AT(0,9).
+
+    PRINT
+        "FULL BURN: " +
+        ROUND(
+            burnEstimate,
+            2
+        ) +
+        " s       "
+        AT(0,11).
+
+    PRINT
+        "START LEAD: " +
+        ROUND(
+            startLead,
+            2
+        ) +
+        " s       "
+        AT(0,12).
+
+    PRINT
+        "ETA AP: " +
+        ROUND(
+            ETA:APOAPSIS,
+            2
+        ) +
+        " s       "
+        AT(0,13).
+
+    IF ETA:APOAPSIS <=
+       startLead {
+
+        SET terminalStart TO TRUE.
+    }.
+
+    IF MISSIONTIME -
+       lastLog >= 0.5 {
+
+        logState(
+            "TERMINAL_COAST"
+        ).
+
+        SET lastLog TO
+            MISSIONTIME.
+    }.
+
+    WAIT 0.02.
+}.
+
+// ======================================================
+// SV-5.5 TERMINAL
+//
+// Proven radial/tangential SV-3.3 controller with a small
+// normal component layered on as a yaw bias.  The normal
+// component is capped as a fraction of the burn the orbit
+// controller already wants.  When the orbit burn stops,
+// plane correction stops too.
+// ======================================================
+
+CLEARSCREEN.
+
+PRINT "===== SV-5.5 TERMINAL =====".
+
+SET terminalStartMET TO
+    MISSIONTIME.
+
+SET guidanceVec TO
+    SHIP:PROGRADE:VECTOR.
+
+SET steeringTargetVec TO
+    guidanceVec.
+
+SET throttleCmd TO 0.
+
+LOCK STEERING TO
+    steeringTargetVec.
+
+LOCK THROTTLE TO
+    throttleCmd.
+
+SET lastFlightLog TO
+    MISSIONTIME.
+
+SET lastGuidanceLog TO
+    MISSIONTIME.
+
+UNTIL terminalComplete
+      OR terminalFailed {
+
+    SET targetPlaneNormal TO
+        targetPlaneNow().
+
+    SET upVec TO
+        SHIP:UP:VECTOR.
+
+    SET orbitVelVec TO
+        SHIP:VELOCITY:ORBIT.
+
+    SET radialVel TO
+        VDOT(
+            orbitVelVec,
+            upVec
+        ).
+
+    SET tangentialVelVec TO
+        orbitVelVec -
+        (
+            upVec *
+            radialVel
+        ).
+
+    SET tangentialVel TO
+        tangentialVelVec:MAG.
+
+    IF tangentialVel > 1 {
+
+        SET tangentialUnit TO
+            tangentialVelVec:NORMALIZED.
+
+    } ELSE {
+
+        SET tangentialUnit TO
+            SHIP:PROGRADE:VECTOR.
+    }.
+
+    SET currentAp TO
+        SHIP:OBT:APOAPSIS.
+
+    SET currentPe TO
+        SHIP:OBT:PERIAPSIS.
+
+    SET currentInclination TO
+        SHIP:OBT:INCLINATION.
+
+    SET apOrbitError TO
+        orbitTarget -
+        currentAp.
+
+    SET peOrbitError TO
+        orbitTarget -
+        currentPe.
+
+    SET radiusNow TO
+        SHIP:BODY:RADIUS +
+        SHIP:ALTITUDE.
+
+    SET altitudeError TO
+        orbitTarget -
+        SHIP:ALTITUDE.
+
+    SET circularVelNow TO
+        SQRT(
+            SHIP:BODY:MU /
+            radiusNow
+        ).
+
+    SET tangentialError TO
+        circularVelNow -
+        tangentialVel.
+
+    // --------------------------------------------------
+    // ORBITAL-PLANE ERROR / TRIM DIRECTION
+    // --------------------------------------------------
+
+    SET currentNormalVec TO
+        VCRS(
+            orbitVelVec,
+            upVec
+        ).
+
+    IF currentNormalVec:MAG >
+       0.000001 {
+
+        SET currentOrbitNormal TO
+            currentNormalVec:NORMALIZED.
+
+    } ELSE {
+
+        SET currentOrbitNormal TO
+            targetPlaneNormal.
+    }.
+
+    IF VDOT(
+        currentOrbitNormal,
+        targetPlaneNormal
+       ) < 0 {
+
+        SET currentOrbitNormal TO
+            -currentOrbitNormal.
+    }.
+
+    SET planeAngleError TO
+        VANG(
+            currentOrbitNormal,
+            targetPlaneNormal
+        ).
+
+    SET planeDvEstimate TO
+        2 *
+        tangentialVel *
+        SIN(
+            planeAngleError /
+            2
+        ).
+
+    SET plusProbeVel TO
+        orbitVelVec +
+        (
+            currentOrbitNormal *
+            planeProbeDv
+        ).
+
+    SET plusProbeNormal TO
+        VCRS(
+            plusProbeVel,
+            upVec
+        ).
+
+    IF plusProbeNormal:MAG >
+       0.000001 {
+
+        SET plusProbeNormal TO
+            plusProbeNormal:NORMALIZED.
+
+    } ELSE {
+
+        SET plusProbeNormal TO
+            currentOrbitNormal.
+    }.
+
+    IF VDOT(
+        plusProbeNormal,
+        targetPlaneNormal
+       ) < 0 {
+
+        SET plusProbeNormal TO
+            -plusProbeNormal.
+    }.
+
+    SET plusProbeAngle TO
+        VANG(
+            plusProbeNormal,
+            targetPlaneNormal
+        ).
+
+    SET minusProbeVel TO
+        orbitVelVec -
+        (
+            currentOrbitNormal *
+            planeProbeDv
+        ).
+
+    SET minusProbeNormal TO
+        VCRS(
+            minusProbeVel,
+            upVec
+        ).
+
+    IF minusProbeNormal:MAG >
+       0.000001 {
+
+        SET minusProbeNormal TO
+            minusProbeNormal:NORMALIZED.
+
+    } ELSE {
+
+        SET minusProbeNormal TO
+            currentOrbitNormal.
+    }.
+
+    IF VDOT(
+        minusProbeNormal,
+        targetPlaneNormal
+       ) < 0 {
+
+        SET minusProbeNormal TO
+            -minusProbeNormal.
+    }.
+
+    SET minusProbeAngle TO
+        VANG(
+            minusProbeNormal,
+            targetPlaneNormal
+        ).
+
+    SET planeCorrectionUnit TO
+        currentOrbitNormal.
+
+    SET bestProbeAngle TO
+        plusProbeAngle.
+
+    IF minusProbeAngle <
+       plusProbeAngle {
+
+        SET planeCorrectionUnit TO
+            -currentOrbitNormal.
+
+        SET bestProbeAngle TO
+            minusProbeAngle.
+    }.
+
+    SET planeImprovementPerDv TO
+        (
+            planeAngleError -
+            bestProbeAngle
+        )
+        /
+        planeProbeDv.
+
+    IF planeImprovementPerDv < 0 {
+        SET planeImprovementPerDv TO 0.
+    }.
+
+    SET idealPlaneEffectiveness TO 0.
+
+    IF tangentialVel > 1 {
+
+        SET idealPlaneEffectiveness TO
+            57.2957795 /
+            tangentialVel.
+    }.
+
+    SET planeEffectivenessRatio TO 0.
+
+    IF idealPlaneEffectiveness >
+       0.0000001 {
+
+        SET planeEffectivenessRatio TO
+            planeImprovementPerDv /
+            idealPlaneEffectiveness.
+    }.
+
+    IF planeEffectivenessRatio > 1 {
+        SET planeEffectivenessRatio TO 1.
+    }.
+
+    IF planeEffectivenessRatio < 0 {
+        SET planeEffectivenessRatio TO 0.
+    }.
+
+    // --------------------------------------------------
+    // PROVEN SV-3.3 RADIAL / TANGENTIAL CONTROLLER
     // --------------------------------------------------
 
     IF NOT fineLatched
        AND
-       ABS(tangentialError) <=
-           fineLatchTanError {
+       ABS(
+           tangentialError
+       ) <=
+       fineLatchTanError {
 
         SET fineLatched TO TRUE.
 
@@ -2207,13 +2421,15 @@ UNTIL terminalComplete
         tangentialCoupling.
 
     IF fineLatched
-       AND tanReqAccel < 0 {
+       AND
+       tanReqAccel < 0 {
 
         SET tanReqAccel TO 0.
     }.
 
     IF NOT fineLatched
-       AND tanReqAccel < -2 {
+       AND
+       tanReqAccel < -2 {
 
         SET tanReqAccel TO -2.
     }.
@@ -2280,14 +2496,98 @@ UNTIL terminalComplete
         )
         +
         (
-            rHat *
+            upVec *
             radialAllocAccel
         ).
 
-    SET orbitCommandAccel TO
+    SET baseCommandAccel TO
         orbitGuidanceVec:MAG.
 
-    SET orbitInsideCapture TO FALSE.
+    // --------------------------------------------------
+    // LIMITED PLANE YAW TRIM
+    //
+    // The trim can only be a small fraction of the burn
+    // already requested by radial/tangential guidance.
+    // Therefore it disappears automatically when the main
+    // insertion burn ends.
+    // --------------------------------------------------
+
+    SET planeTrimAccel TO 0.
+
+    SET planeTrimTime TO
+        tGo.
+
+    IF planeTrimTime <
+       terminalPlaneTrimTimeFloor {
+
+        SET planeTrimTime TO
+            terminalPlaneTrimTimeFloor.
+    }.
+
+    SET requestedPlaneAccel TO 0.
+
+    IF planeAngleError >
+       0.000001
+       AND
+       planeEffectivenessRatio >=
+       planeTrimEffectivenessFloor {
+
+        SET requestedPlaneAccel TO
+            (
+                planeDvEstimate /
+                planeTrimTime
+            )
+            *
+            planeEffectivenessRatio.
+    }.
+
+    SET maxPlaneAccelByYaw TO
+        baseCommandAccel *
+        TAN(
+            terminalPlaneTrimMaxYaw
+        ).
+
+    SET planeTrimAccel TO
+        requestedPlaneAccel.
+
+    IF planeTrimAccel >
+       maxPlaneAccelByYaw {
+
+        SET planeTrimAccel TO
+            maxPlaneAccelByYaw.
+    }.
+
+    IF planeTrimAccel < 0 {
+        SET planeTrimAccel TO 0.
+    }.
+
+    SET guidanceVec TO
+        orbitGuidanceVec +
+        (
+            planeCorrectionUnit *
+            planeTrimAccel
+        ).
+
+    SET commandAccel TO
+        guidanceVec:MAG.
+
+    SET actualTrimYaw TO 0.
+
+    IF baseCommandAccel >
+       0.000001 {
+
+        SET actualTrimYaw TO
+            ARCTAN2(
+                planeTrimAccel,
+                baseCommandAccel
+            ).
+    }.
+
+    // --------------------------------------------------
+    // ORBIT CAPTURE
+    // --------------------------------------------------
+
+    SET insideCapture TO FALSE.
 
     IF ABS(apOrbitError) <=
           apsisTolerance
@@ -2295,357 +2595,156 @@ UNTIL terminalComplete
        ABS(peOrbitError) <=
           apsisTolerance {
 
-        SET orbitInsideCapture TO TRUE.
+        SET insideCapture TO TRUE.
     }.
 
-    // --------------------------------------------------
-    // PHASE: INSERTION / CLEANUP
-    // --------------------------------------------------
+    IF insideCapture
+       AND NOT captureActive {
 
-    IF missionPhase = "INSERTION"
-       OR
-       missionPhase = "CLEANUP" {
+        SET captureActive TO TRUE.
 
-        SET planeCaptureActive TO
-            FALSE.
+        SET captureStartMET TO
+            MISSIONTIME.
 
-        SET planeAlignedStartMET TO
-            -1.
-
-        IF orbitInsideCapture {
-
-            SET throttleCmd TO 0.
-
-            LOCK THROTTLE TO
-                throttleCmd.
-
-            LOCK STEERING TO
-                tangentialUnit.
-
-            IF NOT orbitCaptureActive {
-
-                SET orbitCaptureActive TO
-                    TRUE.
-
-                SET orbitCaptureStartMET TO
-                    MISSIONTIME.
-
-                logState(
-                    "ORBIT_CAPTURE_ENTER"
-                ).
-
-            } ELSE IF
-              MISSIONTIME -
-              orbitCaptureStartMET >=
-              captureHoldTime {
-
-                SET orbitCaptureActive TO
-                    FALSE.
-
-                SET thrustActive TO
-                    FALSE.
-
-                IF planeAngleError <=
-                   planeCaptureTolerance {
-
-                    SET terminalComplete TO
-                        TRUE.
-
-                    logState(
-                        "FINAL_CAPTURE_CONFIRMED"
-                    ).
-
-                } ELSE {
-
-                    SET missionPhase TO
-                        "PLANE_COAST".
-
-                    SET throttleCmd TO 0.
-
-                    LOCK THROTTLE TO
-                        throttleCmd.
-
-                    LOCK STEERING TO
-                        planeCorrectionUnit.
-
-                    logState(
-                        "INSERTION_COMPLETE"
-                    ).
-                }.
-            }.
-
-        } ELSE {
-
-            IF orbitCaptureActive {
-
-                SET orbitCaptureActive TO
-                    FALSE.
-
-                logState(
-                    "ORBIT_CAPTURE_LOST"
-                ).
-            }.
-
-            SET steeringTargetVec TO
-                tangentialUnit.
-
-            IF orbitGuidanceVec:MAG >
-               0.0001 {
-
-                SET steeringTargetVec TO
-                    orbitGuidanceVec.
-            }.
-
-            LOCK STEERING TO
-                steeringTargetVec.
-
-            IF thrustActive {
-
-                IF orbitCommandAccel <=
-                   accelStopThreshold {
-
-                    SET thrustActive TO
-                        FALSE.
-                }.
-
-            } ELSE {
-
-                IF orbitCommandAccel >=
-                   accelStartThreshold {
-
-                    SET thrustActive TO
-                        TRUE.
-                }.
-            }.
-
-            SET throttleCmd TO 0.
-
-            IF thrustActive
-               AND
-               orbitCommandAccel >
-                   accelStopThreshold
-               AND
-               STEERINGMANAGER:ANGLEERROR <=
-                   orbitIgnitionSteerError {
-
-                IF maxAccel > 0 {
-
-                    SET throttleCmd TO
-                        orbitCommandAccel /
-                        maxAccel.
-                }.
-            }.
-
-            IF throttleCmd > 1 {
-                SET throttleCmd TO 1.
-            }.
-
-            IF throttleCmd < 0 {
-                SET throttleCmd TO 0.
-            }.
-
-            LOCK THROTTLE TO
-                throttleCmd.
-        }.
-
-    // --------------------------------------------------
-    // PHASE: DEDICATED PLANE CHANGE
-    // --------------------------------------------------
-
-    } ELSE IF
-      missionPhase = "PLANE_COAST"
-      OR
-      missionPhase = "PLANE_BURN" {
-
-        SET orbitCaptureActive TO
-            FALSE.
-
-        SET thrustActive TO
-            FALSE.
-
-        SET steeringTargetVec TO
-            planeCorrectionUnit.
-
-        LOCK STEERING TO
-            steeringTargetVec.
+        SET thrustActive TO FALSE.
 
         SET throttleCmd TO 0.
+
+        SET steeringTargetVec TO
+            tangentialUnit.
 
         LOCK THROTTLE TO
             throttleCmd.
 
-        IF planeAngleError <=
-           planeCaptureTolerance {
+        logState(
+            "CAPTURE_ENTER"
+        ).
+    }.
 
-            IF NOT planeCaptureActive {
+    IF captureActive {
 
-                SET planeCaptureActive TO
-                    TRUE.
+        SET throttleCmd TO 0.
 
-                SET planeCaptureStartMET TO
-                    MISSIONTIME.
+        SET steeringTargetVec TO
+            tangentialUnit.
 
-                SET missionPhase TO
-                    "PLANE_COAST".
+        LOCK THROTTLE TO
+            throttleCmd.
 
-                logState(
-                    "PLANE_CAPTURE_ENTER"
-                ).
+        IF NOT insideCapture {
 
-            } ELSE IF
-              MISSIONTIME -
-              planeCaptureStartMET >=
-              captureHoldTime {
+            SET captureActive TO FALSE.
 
-                SET planeCaptureActive TO
-                    FALSE.
+            SET thrustActive TO FALSE.
 
-                SET missionPhase TO
-                    "CLEANUP".
+            logState(
+                "CAPTURE_LOST"
+            ).
+
+        } ELSE IF
+          MISSIONTIME -
+          captureStartMET >=
+          captureHoldTime {
+
+            SET terminalComplete TO TRUE.
+
+            logState(
+                "CAPTURE_CONFIRMED"
+            ).
+        }.
+
+    } ELSE {
+
+        IF thrustActive {
+
+            IF commandAccel <=
+               accelStopThreshold {
+
+                SET thrustActive TO FALSE.
 
                 SET throttleCmd TO 0.
 
                 LOCK THROTTLE TO
                     throttleCmd.
 
-                LOCK STEERING TO
-                    tangentialUnit.
-
                 logState(
-                    "PLANE_CAPTURE_CONFIRMED"
+                    "FINE_COAST_ENTER"
                 ).
+
+            } ELSE {
+
+                SET steeringTargetVec TO
+                    guidanceVec.
+
+                IF maxAccel > 0 {
+
+                    SET throttleCmd TO
+                        commandAccel /
+                        maxAccel.
+
+                } ELSE {
+
+                    SET throttleCmd TO 0.
+                }.
+
+                IF throttleCmd > 1 {
+                    SET throttleCmd TO 1.
+                }.
+
+                IF throttleCmd < 0 {
+                    SET throttleCmd TO 0.
+                }.
+
+                LOCK THROTTLE TO
+                    throttleCmd.
             }.
 
         } ELSE {
 
-            IF planeCaptureActive {
+            SET throttleCmd TO 0.
 
-                SET planeCaptureActive TO
-                    FALSE.
+            LOCK THROTTLE TO
+                throttleCmd.
 
-                logState(
-                    "PLANE_CAPTURE_LOST"
-                ).
-            }.
+            IF commandAccel >=
+               accelStartThreshold {
 
-            IF missionPhase =
-               "PLANE_COAST" {
+                SET thrustActive TO TRUE.
 
-                // Pre-point with the engine OFF.
-                // Alignment must remain good for a full
-                // hold interval before ignition.
+                SET steeringTargetVec TO
+                    guidanceVec.
 
-                IF planeEffectivenessRatio >=
-                      planeIgnitionEffectiveness
-                   AND
-                   STEERINGMANAGER:ANGLEERROR <=
-                      planeIgnitionSteerError {
+                IF maxAccel > 0 {
 
-                    IF planeAlignedStartMET < 0 {
-
-                        SET planeAlignedStartMET TO
-                            MISSIONTIME.
-                    }.
-
-                    IF MISSIONTIME -
-                       planeAlignedStartMET >=
-                       planeAlignmentHold {
-
-                        SET missionPhase TO
-                            "PLANE_BURN".
-
-                        logState(
-                            "PLANE_BURN_START"
-                        ).
-                    }.
+                    SET throttleCmd TO
+                        commandAccel /
+                        maxAccel.
 
                 } ELSE {
-
-                    SET planeAlignedStartMET TO
-                        -1.
-                }.
-
-            } ELSE {
-
-                // PLANE_BURN:
-                // Never continue thrust while slewing or
-                // after the useful node window has passed.
-
-                IF planeEffectivenessRatio <
-                      planeAbortEffectiveness
-                   OR
-                   STEERINGMANAGER:ANGLEERROR >
-                      planeAbortSteerError {
-
-                    SET missionPhase TO
-                        "PLANE_COAST".
-
-                    SET planeAlignedStartMET TO
-                        -1.
 
                     SET throttleCmd TO 0.
-
-                    LOCK THROTTLE TO
-                        throttleCmd.
-
-                    logState(
-                        "PLANE_BURN_CUTOFF"
-                    ).
-
-                } ELSE {
-
-                    SET planeBurnAccel TO
-                        localPlaneDvEstimate /
-                        planeBurnTimeConstant.
-
-                    IF planeAngleError <=
-                       planeFineAngle {
-
-                        SET planeBurnAccel TO
-                            localPlaneDvEstimate /
-                            planeFineTimeConstant.
-
-                        IF planeBurnAccel >
-                           planeFineAccelMax {
-
-                            SET planeBurnAccel TO
-                                planeFineAccelMax.
-                        }.
-
-                    } ELSE {
-
-                        IF planeBurnAccel >
-                           planeBurnAccelMax {
-
-                            SET planeBurnAccel TO
-                                planeBurnAccelMax.
-                        }.
-                    }.
-
-                    IF maxAccel > 0 {
-
-                        SET throttleCmd TO
-                            planeBurnAccel /
-                            maxAccel.
-                    }.
-
-                    IF throttleCmd > 1 {
-                        SET throttleCmd TO 1.
-                    }.
-
-                    IF throttleCmd < 0 {
-                        SET throttleCmd TO 0.
-                    }.
-
-                    LOCK THROTTLE TO
-                        throttleCmd.
                 }.
+
+                IF throttleCmd > 1 {
+                    SET throttleCmd TO 1.
+                }.
+
+                IF throttleCmd < 0 {
+                    SET throttleCmd TO 0.
+                }.
+
+                LOCK THROTTLE TO
+                    throttleCmd.
+
+                logState(
+                    "FINE_COAST_EXIT"
+                ).
             }.
         }.
     }.
 
     // --------------------------------------------------
-    // PROPULSION FAILURE / TIMEOUT
+    // FAILURE / TIMEOUT
     // --------------------------------------------------
 
     IF SHIP:DELTAV:CURRENT <
@@ -2702,14 +2801,36 @@ UNTIL terminalComplete
     // --------------------------------------------------
 
     PRINT
-        "===== SV-5.4 TERMINAL ====="
+        "===== SV-5.5 TERMINAL ====="
         AT(0,2).
 
-    PRINT
-        "PHASE: " +
-        missionPhase +
-        "                    "
-        AT(0,3).
+    IF captureActive {
+
+        PRINT
+            "MODE: CAPTURE VERIFY     "
+            AT(0,3).
+
+    } ELSE IF fineLatched {
+
+        IF thrustActive {
+
+            PRINT
+                "MODE: FINE + YAW TRIM  "
+                AT(0,3).
+
+        } ELSE {
+
+            PRINT
+                "MODE: FINE COAST       "
+                AT(0,3).
+        }.
+
+    } ELSE {
+
+        PRINT
+            "MODE: TGO + YAW TRIM     "
+            AT(0,3).
+    }.
 
     PRINT
         "AP: " +
@@ -2717,7 +2838,7 @@ UNTIL terminalComplete
             currentAp/1000,
             5
         ) +
-        " km       "
+        " km      "
         AT(0,5).
 
     PRINT
@@ -2726,7 +2847,7 @@ UNTIL terminalComplete
             currentPe/1000,
             5
         ) +
-        " km       "
+        " km      "
         AT(0,6).
 
     PRINT
@@ -2739,7 +2860,7 @@ UNTIL terminalComplete
         AT(0,7).
 
     PRINT
-        "PLANE ANG: " +
+        "PLANE: " +
         ROUND(
             planeAngleError,
             6
@@ -2748,22 +2869,22 @@ UNTIL terminalComplete
         AT(0,8).
 
     PRINT
-        "PLANE DV: " +
+        "AP ERR: " +
         ROUND(
-            localPlaneDvEstimate,
-            3
+            apOrbitError,
+            2
         ) +
-        " m/s      "
-        AT(0,10).
+        " m       "
+        AT(0,9).
 
     PRINT
-        "NODE EFF: " +
+        "PE ERR: " +
         ROUND(
-            planeEffectivenessRatio,
-            3
+            peOrbitError,
+            2
         ) +
-        "          "
-        AT(0,11).
+        " m       "
+        AT(0,10).
 
     PRINT
         "RAD VEL: " +
@@ -2771,7 +2892,7 @@ UNTIL terminalComplete
             radialVel,
             4
         ) +
-        " m/s      "
+        " m/s     "
         AT(0,12).
 
     PRINT
@@ -2780,17 +2901,26 @@ UNTIL terminalComplete
             tangentialError,
             4
         ) +
-        " m/s      "
+        " m/s     "
         AT(0,13).
 
     PRINT
-        "STEER ERR: " +
+        "YAW TRIM: " +
         ROUND(
-            STEERINGMANAGER:ANGLEERROR,
+            actualTrimYaw,
             3
         ) +
         " deg      "
         AT(0,15).
+
+    PRINT
+        "EFF: " +
+        ROUND(
+            planeEffectivenessRatio,
+            3
+        ) +
+        "          "
+        AT(0,16).
 
     PRINT
         "THROTTLE: " +
@@ -2798,8 +2928,17 @@ UNTIL terminalComplete
             throttleCmd,
             7
         ) +
-        "          "
-        AT(0,16).
+        "         "
+        AT(0,18).
+
+    PRINT
+        "STEER ERR: " +
+        ROUND(
+            STEERINGMANAGER:ANGLEERROR,
+            3
+        ) +
+        " deg     "
+        AT(0,19).
 
     PRINT
         "DV LEFT: " +
@@ -2807,8 +2946,8 @@ UNTIL terminalComplete
             SHIP:DELTAV:CURRENT,
             1
         ) +
-        " m/s      "
-        AT(0,18).
+        " m/s     "
+        AT(0,21).
 
     // --------------------------------------------------
     // GUIDANCE LOG
@@ -2817,23 +2956,31 @@ UNTIL terminalComplete
     IF MISSIONTIME -
        lastGuidanceLog >= 0.1 {
 
-        SET actuatorText TO
-            "COAST".
+        SET modeText TO "TGO".
+        SET actuatorText TO "THRUST".
 
-        IF throttleCmd > 0.000001 {
-            SET actuatorText TO "THRUST".
+        IF fineLatched {
+            SET modeText TO "FINE".
+        }.
+
+        IF captureActive {
+            SET modeText TO "CAPTURE".
+        }.
+
+        IF NOT thrustActive {
+            SET actuatorText TO "COAST".
         }.
 
         LOG
             ROUND(MISSIONTIME,3) + "," +
-            missionPhase + "," +
+            modeText + "," +
             actuatorText + "," +
             ROUND(SHIP:ALTITUDE,3) + "," +
             ROUND(currentInclination,7) + "," +
             ROUND(planeAngleError,7) + "," +
-            ROUND(localPlaneDvEstimate,5) + "," +
             ROUND(planeEffectivenessRatio,5) + "," +
-            ROUND(STEERINGMANAGER:ANGLEERROR,5) + "," +
+            ROUND(planeTrimAccel,6) + "," +
+            ROUND(actualTrimYaw,5) + "," +
             ROUND(radialVel,5) + "," +
             ROUND(tangentialVel,5) + "," +
             ROUND(circularVelNow,5) + "," +
@@ -2845,15 +2992,19 @@ UNTIL terminalComplete
             ROUND(radialAllocAccel,5) + "," +
             ROUND(tanAllocAccel,5) + "," +
             ROUND(maxAccel,5) + "," +
-            ROUND(orbitCommandAccel,7) + "," +
+            ROUND(baseCommandAccel,7) + "," +
+            ROUND(commandAccel,7) + "," +
             ROUND(throttleCmd,8) + "," +
             ROUND(currentAp,3) + "," +
             ROUND(currentPe,3) + "," +
             ROUND(apOrbitError,3) + "," +
             ROUND(peOrbitError,3) + "," +
             fineLatched + "," +
-            orbitCaptureActive + "," +
-            planeCaptureActive
+            captureActive + "," +
+            ROUND(
+                STEERINGMANAGER:ANGLEERROR,
+                5
+            )
             TO guidanceLog.
 
         SET lastGuidanceLog TO
@@ -2864,7 +3015,7 @@ UNTIL terminalComplete
        lastFlightLog >= 0.5 {
 
         logState(
-            "SV54_GUIDANCE"
+            "SV55_GUIDANCE"
         ).
 
         SET lastFlightLog TO
@@ -2915,7 +3066,7 @@ IF finalTangentialVec:MAG > 1 {
 
 WAIT 0.25.
 
-logState("SV54_CUTOFF").
+logState("SV55_CUTOFF").
 
 UNLOCK STEERING.
 
@@ -2972,7 +3123,7 @@ SET finalPlaneAngle TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.4 GUIDANCE COMPLETE =====".
+PRINT "===== SV-5.5 GUIDANCE COMPLETE =====".
 PRINT "".
 PRINT "Target:         " + ROUND(orbitTarget/1000,2) + " km @ " + ROUND(targetInclination,3) + " deg".
 PRINT "".
@@ -2984,6 +3135,13 @@ PRINT "Ap error:       " + ROUND(finalApError,2) + " m".
 PRINT "Pe error:       " + ROUND(finalPeError,2) + " m".
 PRINT "Inc error:      " + ROUND(targetInclination - finalInc,7) + " deg".
 PRINT "Plane error:    " + ROUND(finalPlaneAngle,7) + " deg".
+
+IF finalPlaneAngle <= planeResidualReportTolerance {
+    PRINT "Plane status:   IN TOLERANCE".
+} ELSE {
+    PRINT "Plane status:   RESIDUAL - TUNE LAUNCH/TRIM".
+}.
+
 PRINT "".
 PRINT "Remaining dV:   " + ROUND(SHIP:DELTAV:CURRENT,1) + " m/s".
 PRINT "".
@@ -2996,9 +3154,9 @@ IF terminalComplete {
 
 PRINT "".
 PRINT "FLIGHT LOG:".
-PRINT "0:/sv54flight.csv".
+PRINT "0:/sv55flight.csv".
 PRINT "".
 PRINT "GUIDANCE LOG:".
-PRINT "0:/sv54guidance.csv".
+PRINT "0:/sv55guidance.csv".
 
 logState("FINAL").
