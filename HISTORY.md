@@ -65,3 +65,17 @@
 - GUI issue 1: `CLEARGUIS` needed to be called as `CLEARGUIS()`.
 - GUI issue 2: popup strings could not be assigned directly through `PopupMenu:VALUE` on this kOS build; branch selection was changed to numeric `PopupMenu:INDEX`.
 - Current branch: **SV-5.0.2**, awaiting regression flight.
+
+## SV-5.0.2 flight validation
+
+- 80 km / 0° regression: **PASS** — 80.000927 × 79.992223 km at 0.0000168° inclination, 1513.937 m/s dV remaining.
+- 80 km / 30° ascending: **FAIL** — terminal guidance entered at 27.141° inclination with -4374 m plane error and -65.7 m/s cross velocity. Using along-track TGO for the plane axis drove cross velocity to roughly -385 m/s and caused large apoapsis growth.
+
+## SV-5.1 — rotation-compensated multi-axis plane guidance
+
+- Converts the target inertial plane direction into a surface-relative ascent azimuth by subtracting local body-rotation velocity.
+- Recomputes the target-plane surface azimuth during ascent so the vehicle follows the great-circle plane rather than a fixed rhumb-line heading.
+- Starts terminal guidance early when plane displacement/velocity require more time than the along-track burn.
+- Adds an independent plane feasibility horizon using displacement and cross velocity, then uses the larger of along-track and plane horizons for coarse constraint guidance.
+- Fine mode now requires cross-plane position and velocity to be controlled as well as small along-track error.
+- Current development build; pending 80 km / 30° re-test.
