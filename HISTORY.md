@@ -151,3 +151,19 @@
 - Terminal guidance reverts to the proven SV-3.3 radial/tangential controller with the same limited yaw trim layered on top.
 - Plane trim vanishes automatically when radial/tangential guidance no longer requests thrust, preventing a separate plane-change burn.
 - Current development build; next regression target remains 80 km / 30° ascending.
+
+## SV-5.5 80 km / 30° test
+
+- **ORBIT PASS / PLANE MISS** — 80.00021 × 79.99068 km, final inclination 29.713286°, final plane error 0.705064°.
+- Booster burnout inclination was 28.9995°, showing the 1800 m/s launch reference was much closer to the correct direct-ascent solution.
+- Plane trim remained stable but was too weak: SV-5.5 incorrectly multiplied ideal plane dV by local effectiveness, reducing the command when geometry was less effective.
+- The main terminal burn used only about 0.75–0.85° yaw trim despite a 3° cap, and plane error fell only from ~0.889° to ~0.705°.
+
+## SV-5.6 — calibrated launch / corrected trim gain
+
+- Launch-plane reference speed reduced from 1800 to 1500 m/s.
+- Plane trim now uses `planeAngleError / planeImprovementPerDv` from the numerical probe to estimate the local dV actually required.
+- Upper-stage plane-trim time constant reduced from 20 s to 12 s.
+- Terminal plane-trim time floor reduced from 8 s to 6 s.
+- Yaw remains capped at 1.5° in higher dynamic pressure and 3° in near-vacuum/terminal flight.
+- Radial/tangential guidance remains the proven SV-3.3 controller.
