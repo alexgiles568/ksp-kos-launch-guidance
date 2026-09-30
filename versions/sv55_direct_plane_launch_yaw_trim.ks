@@ -794,8 +794,8 @@ UNTIL boosterBurnout {
     //
     // Diagnostics still measure geometric plane position
     // and cross-plane velocity, but they do NOT command a
-    // dogleg.  Residual inclination is handled later as a
-    // dedicated orbital plane change.
+    // dogleg.  Residual error is trimmed gently during the
+    // powered upper-stage / terminal burn.
 
     SET planeOrbitVel TO
         SHIP:VELOCITY:ORBIT.
