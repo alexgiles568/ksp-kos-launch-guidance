@@ -9,7 +9,8 @@ Autonomous launch-guidance development for a 0.625 m two-stage liquid-fueled Ker
 - **SV-5.0.2** — mission-config GUI passed the 80 km / 0° regression test but failed the 80 km / 30° test.
 - **SV-5.1** — failed the 80 km / 30° re-test because the target plane was still represented in a rotating/raw-vector frame.
 - **SV-5.2** — fixed the inertial-plane representation but still missed 30° on ascent and mishandled the residual node correction.
-- **SV-5.3** — current development branch: closed-loop ascent plane tracking, independent orbit fine mode, and node-window plane correction.
+- **SV-5.3** — fixed orbit fine-mode gating but failed because ascent plane feedback was too aggressive and normal thrust began during large steering slews.
+- **SV-5.4** — current development branch: pure circular insertion, throttle-off node pre-pointing, dedicated normal plane burn, then Ap/Pe cleanup.
 
 ## Development path
 
