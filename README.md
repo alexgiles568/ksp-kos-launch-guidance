@@ -8,7 +8,8 @@ Autonomous launch-guidance development for a 0.625 m two-stage liquid-fueled Ker
 - **SV-4.0.1** — locked 80 km / 0° inclination 3-D baseline. Flight result: **80.00026 × 79.99081 km at 0.0001303° inclination**.
 - **SV-5.0.2** — mission-config GUI passed the 80 km / 0° regression test but failed the 80 km / 30° test.
 - **SV-5.1** — failed the 80 km / 30° re-test because the target plane was still represented in a rotating/raw-vector frame.
-- **SV-5.2** — current development branch: inertially frozen target plane plus orbit-normal terminal guidance.
+- **SV-5.2** — fixed the inertial-plane representation but still missed 30° on ascent and mishandled the residual node correction.
+- **SV-5.3** — current development branch: closed-loop ascent plane tracking, independent orbit fine mode, and node-window plane correction.
 
 ## Development path
 
