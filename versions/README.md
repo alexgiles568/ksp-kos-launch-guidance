@@ -23,3 +23,5 @@ See the repository-level `HISTORY.md` for tested results and development rationa
 - `sv52_inertial_orbit_normal_guidance.ks` — current SV-5.2 branch: inertially fixed target plane and orbit-normal terminal controller.
 
 - `sv53_closed_loop_plane_node_guidance.ks` — current SV-5.3 branch: closed-loop ascent plane tracking plus node-window residual plane correction.
+
+- `sv54_phased_insertion_plane_cleanup.ks` — current SV-5.4 branch: circular insertion, aligned node plane burn, then orbit cleanup.
