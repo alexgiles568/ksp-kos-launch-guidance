@@ -96,3 +96,20 @@
 - Uses a small hypothetical normal-dV probe to choose the locally helpful normal-burn sign and estimate local plane-change effectiveness.
 - Fine mode and final capture are keyed to orbital-plane angle rather than instantaneous geometric distance from the target plane.
 - Current development build; next regression target is 80 km / 30° ascending.
+
+## SV-5.2 80 km / 30° re-test
+
+- **FAIL** — final 80.02178 × 79.99377 km, inclination 29.38339°, plane error 0.67023°.
+- Ascent cutoff was still near 29.315°, so the vehicle entered terminal guidance with a genuine residual plane error.
+- At the first node the residual plane change was only about 32 m/s and normal-burn effectiveness was good, but SV-5.2 spread the correction over the whole circularization TGO and let the node pass.
+- Fine radial/tangential guidance never latched because it was incorrectly gated on plane convergence; the coarse radial controller later produced near-radial / reverse steering commands.
+
+## SV-5.3 — closed-loop ascent plane tracking / node guidance
+
+- Uses target-plane position error plus cross-plane velocity feedback during ascent instead of relying on a nominal surface azimuth alone.
+- Uses current horizontal inertial speed when converting the target inertial velocity direction into a rotating-surface heading.
+- Keeps plane tracking active through high-Q upper-stage ascent instead of reverting to raw surface prograde.
+- Decouples the proven SV-3.x radial/tangential fine-mode latch from inclination control.
+- Performs residual plane changes aggressively during useful node windows; normal thrust is suppressed when local plane-change effectiveness is poor.
+- Extends terminal timeout to allow a coast to the next node if necessary.
+- Current development build; next regression target remains 80 km / 30° ascending.
