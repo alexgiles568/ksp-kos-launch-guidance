@@ -11,7 +11,8 @@ Autonomous launch-guidance development for a 0.625 m two-stage liquid-fueled Ker
 - **SV-5.2** — fixed the inertial-plane representation but still missed 30° on ascent and mishandled the residual node correction.
 - **SV-5.3** — fixed orbit fine-mode gating but failed because ascent plane feedback was too aggressive and normal thrust began during large steering slews.
 - **SV-5.4** — sequential plane-change architecture abandoned after the 80 km / 30° test.
-- **SV-5.5** — current development branch: calibrated direct-plane launch plus small second-stage yaw trim layered onto SV-3.3 orbit guidance.
+- **SV-5.5** — achieved excellent 80 × 80 km insertion but retained ~0.705° plane error because the trim-effectiveness gain was backwards.
+- **SV-5.6** — current development branch: 1500 m/s launch calibration plus corrected local-dV plane-trim gain.
 
 ## Development path
 
