@@ -27,3 +27,5 @@ See the repository-level `HISTORY.md` for tested results and development rationa
 - `sv54_phased_insertion_plane_cleanup.ks` — current SV-5.4 branch: circular insertion, aligned node plane burn, then orbit cleanup.
 
 - `sv55_direct_plane_launch_yaw_trim.ks` — current SV-5.5 branch: calibrated direct-plane launch with limited upper-stage/terminal yaw trim.
+
+- `sv56_calibrated_launch_effectiveness_gain_fix.ks` — current SV-5.6 branch: 1500 m/s launch-plane calibration with corrected local-dV yaw-trim gain.
