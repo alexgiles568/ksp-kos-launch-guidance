@@ -1,5 +1,5 @@
 // ======================================================
-// SV-5.5 MISSION CONFIG
+// SV-5.6 MISSION CONFIG
 // 0.625 m TWO-STAGE LIQUID LAUNCHER
 //
 // CONFIGURABLE:
@@ -9,24 +9,26 @@
 //
 // Derived from successful SV-4.0.1 / SV-3.3 guidance.
 //
-// SV-5.5:
-// - Returns to a single continuous second-stage burn.
-// - Launch azimuth uses a tunable inertial reference speed
-//   to compensate for Kerbin rotation without oversteering.
-// - Booster follows the target-plane great-circle tangent.
-// - Upper stage flies an inertial in-plane pitch vector.
-// - Small orbital-plane errors are corrected by a LIMITED
-//   normal/yaw trim while the engine is already burning.
-// - Plane trim is capped by yaw angle and can never become
-//   a separate plane-change burn.
-// - Terminal radial/tangential guidance is the proven
-//   SV-3.3 architecture with the small yaw trim layered on.
+// SV-5.6:
+// - Calibrates launch-plane reference speed from the SV-5.5
+//   flight: 1800 m/s produced ~29.0 deg at booster burnout.
+// - Uses 1500 m/s to bias launch modestly farther north.
+// - Fixes the main plane-trim gain error in SV-5.5:
+//   required local plane dV is now DIVIDED by measured
+//   effectiveness implicitly via the numerical probe,
+//   rather than multiplied by effectiveness.
+// - Upper-stage and terminal plane trim therefore uses the
+//   actual local dV needed to reduce orbital-normal error.
+// - Trim is still capped to a few degrees of yaw and can
+//   never become a standalone plane-change burn.
+// - Radial/tangential guidance remains the proven SV-3.3
+//   controller.
 //
 // FAIRING MUST BE ON ACTION GROUP 1
 //
 // Logs:
-//   0:/sv55flight.csv
-//   0:/sv55guidance.csv
+//   0:/sv56flight.csv
+//   0:/sv56guidance.csv
 // ======================================================
 
 CLEARSCREEN.
@@ -46,7 +48,7 @@ SET configGui:X TO 50.
 SET configGui:Y TO 80.
 SET configGui:DRAGGABLE TO TRUE.
 
-SET titleLabel TO configGui:ADDLABEL("SV-5.5 LAUNCH GUIDANCE").
+SET titleLabel TO configGui:ADDLABEL("SV-5.6 LAUNCH GUIDANCE").
 SET titleLabel:STYLE:ALIGN TO "CENTER".
 SET titleLabel:STYLE:HSTRETCH TO TRUE.
 
@@ -181,9 +183,11 @@ SET radialAccelLimit TO 6.
 // Previous tests bracketed the correct 30-deg solution:
 // full circular-speed compensation undershot inclination,
 // while low/current-speed compensation overcorrected.
-// 1800 m/s is the first calibrated midpoint test.
+// SV-5.5 at 1800 m/s reached ~29.0 deg at booster burnout.
+// SV-5.6 moves the reference to 1500 m/s; the upper-stage
+// yaw loop then removes the remaining small residual.
 
-SET launchPlaneReferenceSpeed TO 1800.
+SET launchPlaneReferenceSpeed TO 1500.
 
 // Small yaw correction during the already-required
 // second-stage burn.  It is never allowed to become a
@@ -192,11 +196,11 @@ SET launchPlaneReferenceSpeed TO 1800.
 SET planeProbeDv TO 1.
 SET planeTrimEffectivenessFloor TO 0.05.
 
-SET upperPlaneTrimTimeConstant TO 20.
+SET upperPlaneTrimTimeConstant TO 12.
 SET upperPlaneTrimMaxYaw TO 3.
 SET upperPlaneTrimMaxYawHighQ TO 1.5.
 
-SET terminalPlaneTrimTimeFloor TO 8.
+SET terminalPlaneTrimTimeFloor TO 6.
 SET terminalPlaneTrimMaxYaw TO 3.
 
 SET planeResidualReportTolerance TO 0.05.
@@ -250,8 +254,8 @@ SET thrustActive TO TRUE.
 // LOG FILES
 // ======================================================
 
-SET flightLog TO "0:/sv55flight.csv".
-SET guidanceLog TO "0:/sv55guidance.csv".
+SET flightLog TO "0:/sv56flight.csv".
+SET guidanceLog TO "0:/sv56guidance.csv".
 
 IF EXISTS(flightLog) {
     DELETEPATH(flightLog).
@@ -716,7 +720,7 @@ SET guidanceAzimuth TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.5 MISSION =====".
+PRINT "===== SV-5.6 MISSION =====".
 PRINT "".
 PRINT "TARGET ALT: " + ROUND(orbitTarget / 1000,2) + " km".
 PRINT "TARGET INC: " + ROUND(targetInclination,3) + " deg".
@@ -1332,6 +1336,24 @@ UNTIL ascentDone {
         SET planeEffectivenessRatio TO 0.
     }.
 
+    // Local dV required at the current geometry.
+    // This is the key SV-5.6 gain fix.  SV-5.5 multiplied
+    // ideal plane dV by effectiveness, which REDUCED the
+    // command exactly when geometry made each m/s less
+    // effective.  The numerical derivative already tells
+    // us how much orbital-normal angle each m/s buys here.
+
+    SET localPlaneDvEstimate TO
+        planeDvEstimate.
+
+    IF planeImprovementPerDv >
+       0.0000001 {
+
+        SET localPlaneDvEstimate TO
+            planeAngleError /
+            planeImprovementPerDv.
+    }.
+
     // --------------------------------------------------
     // PITCH / APOAPSIS GUIDANCE
     // --------------------------------------------------
@@ -1509,12 +1531,8 @@ UNTIL ascentDone {
        planeTrimEffectivenessFloor {
 
         SET requestedPlaneAccel TO
-            (
-                planeDvEstimate /
-                upperPlaneTrimTimeConstant
-            )
-            *
-            planeEffectivenessRatio.
+            localPlaneDvEstimate /
+            upperPlaneTrimTimeConstant.
     }.
 
     SET activePlaneYawLimit TO
@@ -1650,13 +1668,22 @@ UNTIL ascentDone {
         AT(0,13).
 
     PRINT
+        "PLN DV: " +
+        ROUND(
+            localPlaneDvEstimate,
+            2
+        ) +
+        " m/s      "
+        AT(0,14).
+
+    PRINT
         "EFF: " +
         ROUND(
             planeEffectivenessRatio,
             3
         ) +
         "          "
-        AT(0,14).
+        AT(0,15).
 
     PRINT
         "ETA AP: " +
@@ -1665,7 +1692,7 @@ UNTIL ascentDone {
             1
         ) +
         " s        "
-        AT(0,15).
+        AT(0,16).
 
     PRINT
         "THR: " +
@@ -1674,7 +1701,7 @@ UNTIL ascentDone {
             3
         ) +
         "          "
-        AT(0,16).
+        AT(0,17).
 
     IF MISSIONTIME -
        lastLog >= 0.25 {
@@ -1773,7 +1800,7 @@ SET exhaustVelocity TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.5 ACQUISITION =====".
+PRINT "===== SV-5.6 ACQUISITION =====".
 
 SET terminalStart TO FALSE.
 SET lastLog TO MISSIONTIME.
@@ -1954,7 +1981,7 @@ UNTIL terminalStart {
 }.
 
 // ======================================================
-// SV-5.5 TERMINAL
+// SV-5.6 TERMINAL
 //
 // Proven radial/tangential SV-3.3 controller with a small
 // normal component layered on as a yaw bias.  The normal
@@ -1965,7 +1992,7 @@ UNTIL terminalStart {
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.5 TERMINAL =====".
+PRINT "===== SV-5.6 TERMINAL =====".
 
 SET terminalStartMET TO
     MISSIONTIME.
@@ -2242,6 +2269,17 @@ UNTIL terminalComplete
 
     IF planeEffectivenessRatio < 0 {
         SET planeEffectivenessRatio TO 0.
+    }.
+
+    SET localPlaneDvEstimate TO
+        planeDvEstimate.
+
+    IF planeImprovementPerDv >
+       0.0000001 {
+
+        SET localPlaneDvEstimate TO
+            planeAngleError /
+            planeImprovementPerDv.
     }.
 
     // --------------------------------------------------
@@ -2533,12 +2571,8 @@ UNTIL terminalComplete
        planeTrimEffectivenessFloor {
 
         SET requestedPlaneAccel TO
-            (
-                planeDvEstimate /
-                planeTrimTime
-            )
-            *
-            planeEffectivenessRatio.
+            localPlaneDvEstimate /
+            planeTrimTime.
     }.
 
     SET maxPlaneAccelByYaw TO
@@ -2801,7 +2835,7 @@ UNTIL terminalComplete
     // --------------------------------------------------
 
     PRINT
-        "===== SV-5.5 TERMINAL ====="
+        "===== SV-5.6 TERMINAL ====="
         AT(0,2).
 
     IF captureActive {
@@ -2914,13 +2948,22 @@ UNTIL terminalComplete
         AT(0,15).
 
     PRINT
+        "PLN DV: " +
+        ROUND(
+            localPlaneDvEstimate,
+            2
+        ) +
+        " m/s      "
+        AT(0,16).
+
+    PRINT
         "EFF: " +
         ROUND(
             planeEffectivenessRatio,
             3
         ) +
         "          "
-        AT(0,16).
+        AT(0,17).
 
     PRINT
         "THROTTLE: " +
@@ -3015,7 +3058,7 @@ UNTIL terminalComplete
        lastFlightLog >= 0.5 {
 
         logState(
-            "SV55_GUIDANCE"
+            "SV56_GUIDANCE"
         ).
 
         SET lastFlightLog TO
@@ -3066,7 +3109,7 @@ IF finalTangentialVec:MAG > 1 {
 
 WAIT 0.25.
 
-logState("SV55_CUTOFF").
+logState("SV56_CUTOFF").
 
 UNLOCK STEERING.
 
@@ -3123,7 +3166,7 @@ SET finalPlaneAngle TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.5 GUIDANCE COMPLETE =====".
+PRINT "===== SV-5.6 GUIDANCE COMPLETE =====".
 PRINT "".
 PRINT "Target:         " + ROUND(orbitTarget/1000,2) + " km @ " + ROUND(targetInclination,3) + " deg".
 PRINT "".
@@ -3154,9 +3197,9 @@ IF terminalComplete {
 
 PRINT "".
 PRINT "FLIGHT LOG:".
-PRINT "0:/sv55flight.csv".
+PRINT "0:/sv56flight.csv".
 PRINT "".
 PRINT "GUIDANCE LOG:".
-PRINT "0:/sv55guidance.csv".
+PRINT "0:/sv56guidance.csv".
 
 logState("FINAL").
