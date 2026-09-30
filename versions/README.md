@@ -19,3 +19,5 @@
 Earlier builds for which the exact assistant message was not fully recoverable in the active transcript are kept under `../reconstructed/` rather than presented as byte-for-byte originals.
 
 See the repository-level `HISTORY.md` for tested results and development rationale.
+
+- `sv52_inertial_orbit_normal_guidance.ks` — current SV-5.2 branch: inertially fixed target plane and orbit-normal terminal controller.
