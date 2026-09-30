@@ -21,3 +21,5 @@ Earlier builds for which the exact assistant message was not fully recoverable i
 See the repository-level `HISTORY.md` for tested results and development rationale.
 
 - `sv52_inertial_orbit_normal_guidance.ks` — current SV-5.2 branch: inertially fixed target plane and orbit-normal terminal controller.
+
+- `sv53_closed_loop_plane_node_guidance.ks` — current SV-5.3 branch: closed-loop ascent plane tracking plus node-window residual plane correction.
