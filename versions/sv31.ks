@@ -518,7 +518,7 @@ UNTIL terminalComplete
       OR terminalFailed {
 
     SET upVec TO SHIP:UP:VECTOR.
-    SET orbitVelVec TO SHIP:VELOCITY:ORBIT;
+    SET orbitVelVec TO SHIP:VELOCITY:ORBIT.
 
     SET radialVel TO VDOT(orbitVelVec,upVec).
 
@@ -541,7 +541,7 @@ UNTIL terminalComplete
     SET peOrbitError TO orbitTarget - currentPe.
 
     SET radiusNow TO SHIP:BODY:RADIUS + SHIP:ALTITUDE.
-    SET altitudeError TO orbitTarget - SHIP:ALTITUDE;
+    SET altitudeError TO orbitTarget - SHIP:ALTITUDE.
     SET circularVelNow TO SQRT(SHIP:BODY:MU / radiusNow).
     SET tangentialError TO circularVelNow - tangentialVel.
 
@@ -622,13 +622,13 @@ UNTIL terminalComplete
         SET tangentialGain TO coarseTangentialGain.
     }.
 
-    SET desiredTangentialAccel TO tangentialGain * tangentialError;
+    SET desiredTangentialAccel TO tangentialGain * tangentialError.
 
     SET tangentialCoupling TO
         (radialVel * tangentialVel) /
         radiusNow.
 
-    SET tanReqAccel TO desiredTangentialAccel + tangentialCoupling;
+    SET tanReqAccel TO desiredTangentialAccel + tangentialCoupling.
 
     IF fineLatched
        AND tanReqAccel < 0 {
