@@ -1,5 +1,5 @@
 // ======================================================
-// SV-5.6 MISSION CONFIG
+// SV-5.7 MISSION CONFIG
 // 0.625 m TWO-STAGE LIQUID LAUNCHER
 //
 // CONFIGURABLE:
@@ -9,26 +9,24 @@
 //
 // Derived from successful SV-4.0.1 / SV-3.3 guidance.
 //
-// SV-5.6:
-// - Calibrates launch-plane reference speed from the SV-5.5
-//   flight: 1800 m/s produced ~29.0 deg at booster burnout.
-// - Uses 1500 m/s to bias launch modestly farther north.
-// - Fixes the main plane-trim gain error in SV-5.5:
-//   required local plane dV is now DIVIDED by measured
-//   effectiveness implicitly via the numerical probe,
-//   rather than multiplied by effectiveness.
-// - Upper-stage and terminal plane trim therefore uses the
-//   actual local dV needed to reduce orbital-normal error.
-// - Trim is still capped to a few degrees of yaw and can
-//   never become a standalone plane-change burn.
-// - Radial/tangential guidance remains the proven SV-3.3
-//   controller.
+// SV-5.7:
+// - Calibrates direct-plane launch from the SV-5.5/5.6 tests.
+// - 1800 m/s reference -> ~29.00 deg booster burnout.
+// - 1500 m/s reference -> ~29.61 deg booster burnout.
+// - 1300 m/s is the interpolated first-order 30-deg solution.
+// - Keeps SV-5.6's corrected local-dV plane-trim law.
+// - Gives the powered upper stage more useful yaw authority:
+//   3 deg in higher-Q flight, 5 deg near vacuum.
+// - Terminal yaw trim is capped at 5 deg.
+// - Adds an upper-stage plane-guidance diagnostic CSV.
+// - Tightens fine-burn deadband and inhibits ignition during
+//   large steering errors, preserving meter-class insertion.
 //
 // FAIRING MUST BE ON ACTION GROUP 1
 //
 // Logs:
-//   0:/sv56flight.csv
-//   0:/sv56guidance.csv
+//   0:/sv57flight.csv
+//   0:/sv57guidance.csv
 // ======================================================
 
 CLEARSCREEN.
@@ -48,7 +46,7 @@ SET configGui:X TO 50.
 SET configGui:Y TO 80.
 SET configGui:DRAGGABLE TO TRUE.
 
-SET titleLabel TO configGui:ADDLABEL("SV-5.6 LAUNCH GUIDANCE").
+SET titleLabel TO configGui:ADDLABEL("SV-5.7 LAUNCH GUIDANCE").
 SET titleLabel:STYLE:ALIGN TO "CENTER".
 SET titleLabel:STYLE:HSTRETCH TO TRUE.
 
@@ -184,10 +182,10 @@ SET radialAccelLimit TO 6.
 // full circular-speed compensation undershot inclination,
 // while low/current-speed compensation overcorrected.
 // SV-5.5 at 1800 m/s reached ~29.0 deg at booster burnout.
-// SV-5.6 moves the reference to 1500 m/s; the upper-stage
+// SV-5.7 moves the reference to 1500 m/s; the upper-stage
 // yaw loop then removes the remaining small residual.
 
-SET launchPlaneReferenceSpeed TO 1500.
+SET launchPlaneReferenceSpeed TO 1300.
 
 // Small yaw correction during the already-required
 // second-stage burn.  It is never allowed to become a
@@ -196,20 +194,21 @@ SET launchPlaneReferenceSpeed TO 1500.
 SET planeProbeDv TO 1.
 SET planeTrimEffectivenessFloor TO 0.05.
 
-SET upperPlaneTrimTimeConstant TO 12.
-SET upperPlaneTrimMaxYaw TO 3.
-SET upperPlaneTrimMaxYawHighQ TO 1.5.
+SET upperPlaneTrimTimeConstant TO 10.
+SET upperPlaneTrimMaxYaw TO 5.
+SET upperPlaneTrimMaxYawHighQ TO 3.
 
-SET terminalPlaneTrimTimeFloor TO 6.
-SET terminalPlaneTrimMaxYaw TO 3.
+SET terminalPlaneTrimTimeFloor TO 5.
+SET terminalPlaneTrimMaxYaw TO 5.
 
 SET planeResidualReportTolerance TO 0.05.
+SET terminalIgnitionSteerError TO 8.
 
 SET constraintAllocationFraction TO 0.98.
 SET startLeadBias TO 0.8.
 
-SET accelStopThreshold TO 0.0017.
-SET accelStartThreshold TO 0.0023.
+SET accelStopThreshold TO 0.0008.
+SET accelStartThreshold TO 0.0010.
 
 SET apsisTolerance TO 10.
 SET inclinationTolerance TO 0.001.
@@ -223,7 +222,7 @@ SET originalPitchTS TO STEERINGMANAGER:PITCHTS.
 SET originalYawTS TO STEERINGMANAGER:YAWTS.
 SET steeringFineTuned TO FALSE.
 
-SET terminalMaxTime TO 240.
+SET terminalMaxTime TO 360.
 SET engineFailureHoldTime TO 2.
 
 // ======================================================
@@ -254,8 +253,9 @@ SET thrustActive TO TRUE.
 // LOG FILES
 // ======================================================
 
-SET flightLog TO "0:/sv56flight.csv".
-SET guidanceLog TO "0:/sv56guidance.csv".
+SET flightLog TO "0:/sv57flight.csv".
+SET guidanceLog TO "0:/sv57guidance.csv".
+SET ascentLog TO "0:/sv57ascent.csv".
 
 IF EXISTS(flightLog) {
     DELETEPATH(flightLog).
@@ -265,6 +265,10 @@ IF EXISTS(guidanceLog) {
     DELETEPATH(guidanceLog).
 }.
 
+IF EXISTS(ascentLog) {
+    DELETEPATH(ascentLog).
+}.
+
 LOG
 "MET,event,alt_m,lat_deg,inc_deg,surfspd_mps,orbspd_mps,vertspeed_mps,ap_m,pe_m,eta_ap_s,mass_t,throttle,dv_mps,q_atm"
 TO flightLog.
@@ -272,6 +276,10 @@ TO flightLog.
 LOG
 "MET,mode,actuator,alt_m,inc_deg,plane_angle_err_deg,plane_effectiveness_ratio,plane_trim_accel_mps2,plane_trim_yaw_deg,radial_vel_mps,tangential_vel_mps,circular_vel_mps,tangential_error_mps,tgo_s,natural_radial_accel,radial_req_accel,tangential_req_accel,radial_alloc_accel,tangential_alloc_accel,max_accel,base_command_accel,total_command_accel,throttle,ap_m,pe_m,ap_error_m,pe_error_m,fine_latched,capture,steer_angle_err_deg"
 TO guidanceLog.
+
+LOG
+"MET,alt_m,inc_deg,plane_angle_err_deg,local_plane_dv_mps,plane_effectiveness_ratio,plane_trim_accel_mps2,plane_trim_yaw_deg,pitch_cmd_deg,throttle,q_atm,ap_m,eta_ap_s,surfspd_mps,radial_vel_mps,tangential_vel_mps,steer_angle_err_deg"
+TO ascentLog.
 
 // ======================================================
 // LOGGER
@@ -720,7 +728,7 @@ SET guidanceAzimuth TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.6 MISSION =====".
+PRINT "===== SV-5.7 MISSION =====".
 PRINT "".
 PRINT "TARGET ALT: " + ROUND(orbitTarget / 1000,2) + " km".
 PRINT "TARGET INC: " + ROUND(targetInclination,3) + " deg".
@@ -1102,6 +1110,7 @@ logState("UPPER_ENGINE_READY").
 CLEARSCREEN.
 
 SET lastLog TO MISSIONTIME.
+SET lastAscentLog TO MISSIONTIME.
 
 UNTIL ascentDone {
 
@@ -1337,7 +1346,7 @@ UNTIL ascentDone {
     }.
 
     // Local dV required at the current geometry.
-    // This is the key SV-5.6 gain fix.  SV-5.5 multiplied
+    // This is the key SV-5.7 gain fix.  SV-5.5 multiplied
     // ideal plane dV by effectiveness, which REDUCED the
     // command exactly when geometry made each m/s less
     // effective.  The numerical derivative already tells
@@ -1618,6 +1627,33 @@ UNTIL ascentDone {
             ).
     }.
 
+    IF MISSIONTIME -
+       lastAscentLog >= 0.1 {
+
+        LOG
+            ROUND(MISSIONTIME,3) + "," +
+            ROUND(SHIP:ALTITUDE,3) + "," +
+            ROUND(SHIP:OBT:INCLINATION,7) + "," +
+            ROUND(planeAngleError,7) + "," +
+            ROUND(localPlaneDvEstimate,5) + "," +
+            ROUND(planeEffectivenessRatio,5) + "," +
+            ROUND(planeTrimAccel,6) + "," +
+            ROUND(actualTrimYaw,5) + "," +
+            ROUND(pitchCmd,5) + "," +
+            ROUND(throttleCmd,7) + "," +
+            ROUND(SHIP:Q,7) + "," +
+            ROUND(SHIP:OBT:APOAPSIS,3) + "," +
+            ROUND(ETA:APOAPSIS,3) + "," +
+            ROUND(surfSpd,3) + "," +
+            ROUND(radialVel,5) + "," +
+            ROUND(tangentialVel,5) + "," +
+            ROUND(STEERINGMANAGER:ANGLEERROR,5)
+            TO ascentLog.
+
+        SET lastAscentLog TO
+            MISSIONTIME.
+    }.
+
     PRINT
         "UPPER-STAGE ASCENT     "
         AT(0,6).
@@ -1800,7 +1836,7 @@ SET exhaustVelocity TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.6 ACQUISITION =====".
+PRINT "===== SV-5.7 ACQUISITION =====".
 
 SET terminalStart TO FALSE.
 SET lastLog TO MISSIONTIME.
@@ -1981,7 +2017,7 @@ UNTIL terminalStart {
 }.
 
 // ======================================================
-// SV-5.6 TERMINAL
+// SV-5.7 TERMINAL
 //
 // Proven radial/tangential SV-3.3 controller with a small
 // normal component layered on as a yaw bias.  The normal
@@ -1992,7 +2028,7 @@ UNTIL terminalStart {
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.6 TERMINAL =====".
+PRINT "===== SV-5.7 TERMINAL =====".
 
 SET terminalStartMET TO
     MISSIONTIME.
@@ -2721,6 +2757,16 @@ UNTIL terminalComplete
                     SET throttleCmd TO 0.
                 }.
 
+                // Do not light a tiny precision burn while
+                // the vehicle is still slewing to the new
+                // guidance vector.
+
+                IF STEERINGMANAGER:ANGLEERROR >
+                   terminalIgnitionSteerError {
+
+                    SET throttleCmd TO 0.
+                }.
+
                 IF throttleCmd > 1 {
                     SET throttleCmd TO 1.
                 }.
@@ -2755,6 +2801,16 @@ UNTIL terminalComplete
                         maxAccel.
 
                 } ELSE {
+
+                    SET throttleCmd TO 0.
+                }.
+
+                // Do not light a tiny precision burn while
+                // the vehicle is still slewing to the new
+                // guidance vector.
+
+                IF STEERINGMANAGER:ANGLEERROR >
+                   terminalIgnitionSteerError {
 
                     SET throttleCmd TO 0.
                 }.
@@ -2835,7 +2891,7 @@ UNTIL terminalComplete
     // --------------------------------------------------
 
     PRINT
-        "===== SV-5.6 TERMINAL ====="
+        "===== SV-5.7 TERMINAL ====="
         AT(0,2).
 
     IF captureActive {
@@ -3058,7 +3114,7 @@ UNTIL terminalComplete
        lastFlightLog >= 0.5 {
 
         logState(
-            "SV56_GUIDANCE"
+            "SV57_GUIDANCE"
         ).
 
         SET lastFlightLog TO
@@ -3109,7 +3165,7 @@ IF finalTangentialVec:MAG > 1 {
 
 WAIT 0.25.
 
-logState("SV56_CUTOFF").
+logState("SV57_CUTOFF").
 
 UNLOCK STEERING.
 
@@ -3166,7 +3222,7 @@ SET finalPlaneAngle TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.6 GUIDANCE COMPLETE =====".
+PRINT "===== SV-5.7 GUIDANCE COMPLETE =====".
 PRINT "".
 PRINT "Target:         " + ROUND(orbitTarget/1000,2) + " km @ " + ROUND(targetInclination,3) + " deg".
 PRINT "".
@@ -3197,9 +3253,12 @@ IF terminalComplete {
 
 PRINT "".
 PRINT "FLIGHT LOG:".
-PRINT "0:/sv56flight.csv".
+PRINT "0:/sv57flight.csv".
 PRINT "".
 PRINT "GUIDANCE LOG:".
-PRINT "0:/sv56guidance.csv".
+PRINT "0:/sv57guidance.csv".
+PRINT "".
+PRINT "ASCENT LOG:".
+PRINT "0:/sv57ascent.csv".
 
 logState("FINAL").
