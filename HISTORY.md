@@ -113,3 +113,23 @@
 - Performs residual plane changes aggressively during useful node windows; normal thrust is suppressed when local plane-change effectiveness is poor.
 - Extends terminal timeout to allow a coast to the next node if necessary.
 - Current development build; next regression target remains 80 km / 30° ascending.
+
+## SV-5.3 80 km / 30° re-test
+
+- **FAIL** — final 80.02178 × 79.99377 km, inclination 29.38339°, plane error 0.67023°.
+- Closed-loop ascent plane feedback overcorrected badly, reaching roughly 39.2° inclination at booster burnout before the upper stage returned toward 30°.
+- Decoupling radial/tangential fine mode from plane convergence worked as intended.
+- The remaining failure was attitude sequencing: plane thrust could begin while the stage was still slewing tens of degrees toward the normal-burn vector.
+- One node activation began with about 90° steering error and immediately disturbed apoapsis despite the orbit already being nearly circular.
+
+## SV-5.4 — phased insertion / plane change / cleanup
+
+- Removes the aggressive ascent plane-position and cross-velocity feedback from SV-5.3.
+- Ascent follows the inertially fixed target-plane tangent with Kerbin rotation compensation based on current horizontal inertial speed.
+- Terminal guidance is split into explicit phases: `INSERTION`, `PLANE_COAST`, `PLANE_BURN`, and `CLEANUP`.
+- Insertion and cleanup use only the proven radial/tangential SV-3.x style controller.
+- Plane change is a pure normal/antinormal maneuver with the engine off while pre-pointing.
+- Plane ignition requires node-effectiveness >= 0.90 and steering error <= 3° continuously for 0.5 s.
+- Plane thrust cuts if effectiveness falls below 0.75 or steering error exceeds 5°.
+- Final Ap/Pe cleanup happens only after plane capture.
+- Current development build; next regression target remains 80 km / 30° ascending.
