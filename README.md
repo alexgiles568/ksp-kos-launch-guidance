@@ -6,7 +6,8 @@ Autonomous launch-guidance development for a 0.625 m two-stage liquid-fueled Ker
 
 - **SV-3.3** — locked 80 km circular-orbit baseline. Flight result: **80.00010 × 79.99057 km**.
 - **SV-4.0.1** — locked 80 km / 0° inclination 3-D baseline. Flight result: **80.00026 × 79.99081 km at 0.0001303° inclination**.
-- **SV-5.0.2** — mission-configuration branch with altitude/inclination GUI fixes. Experimental until regression-tested.
+- **SV-5.0.2** — mission-config GUI passed the 80 km / 0° regression test but failed the 80 km / 30° test.
+- **SV-5.1** — current development branch: rotation-compensated ascent and feasibility-aware multi-axis plane guidance.
 
 ## Development path
 
@@ -20,6 +21,7 @@ Autonomous launch-guidance development for a 0.625 m two-stage liquid-fueled Ker
 8. SV-3.3 actuator hysteresis; frozen 2-D reference
 9. SV-4.0 / SV-4.0.1 3-D equatorial-plane guidance; frozen 3-D reference
 10. SV-5.0.x configurable mission GUI / arbitrary target-plane branch
+11. SV-5.1 rotation-compensated, multi-axis plane-guidance branch
 
 See `HISTORY.md` for flight-test notes and status.
 
