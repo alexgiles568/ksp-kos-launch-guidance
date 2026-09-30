@@ -25,3 +25,5 @@ See the repository-level `HISTORY.md` for tested results and development rationa
 - `sv53_closed_loop_plane_node_guidance.ks` — current SV-5.3 branch: closed-loop ascent plane tracking plus node-window residual plane correction.
 
 - `sv54_phased_insertion_plane_cleanup.ks` — current SV-5.4 branch: circular insertion, aligned node plane burn, then orbit cleanup.
+
+- `sv55_direct_plane_launch_yaw_trim.ks` — current SV-5.5 branch: calibrated direct-plane launch with limited upper-stage/terminal yaw trim.
