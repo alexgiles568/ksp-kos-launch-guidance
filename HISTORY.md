@@ -185,3 +185,20 @@
 - Fine-burn hysteresis reduced so the controller can close the last few meters of apsis error.
 - Tiny terminal burns are inhibited while steering error exceeds 8°.
 - Adds `sv57ascent.csv` for upper-stage plane-error, local-dV, effectiveness, yaw-trim and steering diagnostics.
+
+## SV-5.7 80 km / 30° test
+
+- **ORBIT PASS / PLANE MISS** — final 80.00049 × 79.99025 km, inclination 29.77422°, plane error 0.57546°.
+- Booster burnout was 30.19043°, so the 1300 m/s launch reference slightly overcorrected; interpolation with SV-5.6 puts the direct-launch reference near 1365 m/s.
+- Upper stage lost attitude control just after ignition at q ≈ 0.044 atm; steering error exceeded 150° even though plane-trim yaw was capped at 3°.
+- Terminal yaw oscillation was traced to a hard plane-effectiveness threshold: plane trim switched on/off roughly 19 times as effectiveness crossed 0.05.
+
+## SV-5.8 — delayed ignition / damped trim window
+
+- Booster separation delayed to >= 33 km and q <= 0.025 atm.
+- Upper-stage plane trim inhibited above q = 0.015 atm and above 5° steering error.
+- Launch reference recalibrated to 1365 m/s.
+- Plane trim now has hysteretic enable/disable thresholds of 0.18 / 0.10 and only one active correction window per burn, eliminating threshold chatter.
+- Upper-stage and terminal yaw limits reduced to 3°.
+- Fine yaw time constant increased from 4 to 6.
+- SV-3.3 radial/tangential insertion logic retained.
