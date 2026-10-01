@@ -1,5 +1,5 @@
 // ======================================================
-// SV-5.9 MISSION CONFIG
+// SV-6.0 MISSION CONFIG
 // 0.625 m TWO-STAGE LIQUID LAUNCHER
 //
 // CONFIGURABLE:
@@ -9,22 +9,22 @@
 //
 // Derived from successful SV-4.0.1 / SV-3.3 guidance.
 //
-// SV-5.9:
-// - Keeps the SV-5.8 1365 m/s launch calibration; that
-//   produced 29.988 deg at booster burnout.
-// - Replaces the orbital-normal effectiveness/window trim
-//   with a low-gain CROSS-TRACK PD controller.
-// - The controller directly damps signed distance from the
-//   target inertial plane and cross-plane velocity.
-// - This fixes the late-burn behavior where the old node
-//   trim reduced total plane angle while moving inclination
-//   away from 30 deg.
-// - Cross-track correction is continuous and smooth rather
-//   than threshold-switched, with explicit velocity damping,
-//   command filtering, and a 2-deg yaw cap.
-// - The correction remains tied to the existing upper-stage
-//   / terminal insertion burn; it cannot become a separate
-//   plane-change burn.
+// SV-6.0:
+// - Major simplification: mission plane control now targets
+//   the requested INCLINATION directly.
+// - The GUI specifies inclination + ascending/descending
+//   branch, not LAN/RAAN. Previous branches over-constrained
+//   the problem by chasing a frozen full orbital plane.
+// - Keeps the successful 1365 m/s launch calibration, which
+//   produced 29.979 deg at booster burnout in SV-5.9.
+// - Upper-stage and terminal trim use a numerical probe to
+//   measure d(inclination)/d(normal dV) at the current state.
+// - A filtered first-order inclination controller applies
+//   only a small normal/yaw bias during the existing burn.
+// - Effectiveness weighting smoothly removes authority where
+//   normal thrust cannot efficiently change inclination.
+// - No cross-track-position target, no dogleg, no node-window
+//   switching, and no standalone plane-change burn.
 // - SV-3.3 radial/tangential insertion remains unchanged.
 //
 // ======================================================
@@ -46,7 +46,7 @@ SET configGui:X TO 50.
 SET configGui:Y TO 80.
 SET configGui:DRAGGABLE TO TRUE.
 
-SET titleLabel TO configGui:ADDLABEL("SV-5.9 LAUNCH GUIDANCE").
+SET titleLabel TO configGui:ADDLABEL("SV-6.0 LAUNCH GUIDANCE").
 SET titleLabel:STYLE:ALIGN TO "CENTER".
 SET titleLabel:STYLE:HSTRETCH TO TRUE.
 
@@ -194,34 +194,34 @@ SET launchPlaneReferenceSpeed TO 1365.
 // second-stage burn.  It is never allowed to become a
 // dedicated plane-change maneuver.
 
-// Cross-track path controller.
+// Inclination-only trim controller.
 //
-// position error:
-//   signed perpendicular distance from the vehicle's
-//   current radius vector to the fixed target plane.
+// A +/-1 m/s hypothetical burn along the current orbital
+// normal measures the instantaneous sensitivity:
 //
-// velocity error:
-//   signed inertial velocity perpendicular to that plane.
+//   d(inclination) / d(normal dV)
 //
-// The long position time constant keeps this a gentle yaw
-// trim rather than a dogleg.  Velocity feedback supplies
-// the damping that the earlier branches were missing.
+// The requested inclination-rate correction is divided by
+// that measured sensitivity.  Effectiveness weighting then
+// smoothly fades the command near geometries where normal
+// thrust mostly changes LAN instead of inclination.
 
-SET crossTrackPositionTime TO 120.
-SET crossTrackVelocityTime TO 12.
-SET crossTrackVelocityLimit TO 20.
-SET crossTrackFilterGain TO 0.12.
+SET inclinationProbeDv TO 1.
 
-// Compatibility for the still-present orbital-normal
-// diagnostic probe. The cross-track controller itself does
-// not use this value, but the diagnostic block references it.
+// Legacy full-plane diagnostics still use this separate
+// +/-1 m/s probe. It is diagnostic only in SV-6.0.
 SET planeProbeDv TO 1.
 
-SET upperCrossTrackMaxQ TO 0.015.
-SET upperCrossTrackMaxSteerError TO 6.
-SET upperCrossTrackMaxYaw TO 2.
+SET inclinationDerivativeFloor TO 0.0005.
+SET inclinationFilterGain TO 0.12.
 
-SET terminalCrossTrackMaxYaw TO 2.
+SET upperInclinationTimeConstant TO 12.
+SET upperInclinationMaxQ TO 0.015.
+SET upperInclinationMaxSteerError TO 6.
+SET upperInclinationMaxYaw TO 2.
+
+SET terminalInclinationTimeConstant TO 10.
+SET terminalInclinationMaxYaw TO 2.
 
 SET planeResidualReportTolerance TO 0.05.
 SET terminalIgnitionSteerError TO 8.
@@ -264,8 +264,8 @@ SET fineLatched TO FALSE.
 SET captureActive TO FALSE.
 SET captureStartMET TO 0.
 
-SET upperCrossAccelFiltered TO 0.
-SET terminalCrossAccelFiltered TO 0.
+SET upperInclinationAccelFiltered TO 0.
+SET terminalInclinationAccelFiltered TO 0.
 
 SET lowDvStart TO -1.
 
@@ -278,9 +278,9 @@ SET thrustActive TO TRUE.
 // LOG FILES
 // ======================================================
 
-SET flightLog TO "0:/sv59flight.csv".
-SET guidanceLog TO "0:/sv59guidance.csv".
-SET ascentLog TO "0:/sv59ascent.csv".
+SET flightLog TO "0:/sv60flight.csv".
+SET guidanceLog TO "0:/sv60guidance.csv".
+SET ascentLog TO "0:/sv60ascent.csv".
 
 IF EXISTS(flightLog) {
     DELETEPATH(flightLog).
@@ -299,11 +299,11 @@ LOG
 TO flightLog.
 
 LOG
-"MET,mode,actuator,alt_m,inc_deg,plane_angle_err_deg,cross_pos_m,cross_vel_mps,cross_target_vel_mps,cross_accel_cmd_mps2,cross_trim_yaw_deg,radial_vel_mps,tangential_vel_mps,circular_vel_mps,tangential_error_mps,tgo_s,natural_radial_accel,radial_req_accel,tangential_req_accel,radial_alloc_accel,tangential_alloc_accel,max_accel,base_command_accel,total_command_accel,throttle,ap_m,pe_m,ap_error_m,pe_error_m,fine_latched,capture,steer_angle_err_deg"
+"MET,mode,actuator,alt_m,inc_deg,inc_error_deg,inc_derivative_deg_per_mps,inc_effectiveness,inc_accel_cmd_mps2,inc_trim_yaw_deg,radial_vel_mps,tangential_vel_mps,circular_vel_mps,tangential_error_mps,tgo_s,natural_radial_accel,radial_req_accel,tangential_req_accel,radial_alloc_accel,tangential_alloc_accel,max_accel,base_command_accel,total_command_accel,throttle,ap_m,pe_m,ap_error_m,pe_error_m,fine_latched,capture,steer_angle_err_deg"
 TO guidanceLog.
 
 LOG
-"MET,alt_m,inc_deg,plane_angle_err_deg,cross_pos_m,cross_vel_mps,cross_target_vel_mps,cross_accel_cmd_mps2,cross_trim_yaw_deg,pitch_cmd_deg,throttle,q_atm,ap_m,eta_ap_s,surfspd_mps,radial_vel_mps,tangential_vel_mps,steer_angle_err_deg"
+"MET,alt_m,inc_deg,inc_error_deg,inc_derivative_deg_per_mps,inc_effectiveness,inc_accel_cmd_mps2,inc_trim_yaw_deg,pitch_cmd_deg,throttle,q_atm,ap_m,eta_ap_s,surfspd_mps,radial_vel_mps,tangential_vel_mps,steer_angle_err_deg"
 TO ascentLog.
 
 // ======================================================
@@ -753,7 +753,7 @@ SET guidanceAzimuth TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.9 MISSION =====".
+PRINT "===== SV-6.0 MISSION =====".
 PRINT "".
 PRINT "TARGET ALT: " + ROUND(orbitTarget / 1000,2) + " km".
 PRINT "TARGET INC: " + ROUND(targetInclination,3) + " deg".
@@ -1371,7 +1371,7 @@ UNTIL ascentDone {
     }.
 
     // Local dV required at the current geometry.
-    // This is the key SV-5.9 gain fix.  SV-5.5 multiplied
+    // This is the key SV-6.0 gain fix.  SV-5.5 multiplied
     // ideal plane dV by effectiveness, which REDUCED the
     // command exactly when geometry made each m/s less
     // effective.  The numerical derivative already tells
@@ -1557,140 +1557,215 @@ UNTIL ascentDone {
         throttleCmd.
 
     // --------------------------------------------------
-    // DAMPED CROSS-TRACK PD TRIM
+    // INCLINATION-ONLY NORMAL TRIM
     // --------------------------------------------------
 
-    SET planePositionDot TO
-        VDOT(
+    SET currentInclination TO
+        SHIP:OBT:INCLINATION.
+
+    SET inclinationError TO
+        targetInclination -
+        currentInclination.
+
+    SET bodyPoleNow TO
+        SHIP:BODY:ANGULARVEL.
+
+    IF bodyPoleNow:MAG <
+       0.0000001 {
+
+        SET bodyPoleNow TO
+            inertialPole0.
+
+    } ELSE {
+
+        SET bodyPoleNow TO
+            bodyPoleNow:NORMALIZED.
+    }.
+
+    SET inclinationNormalUnit TO
+        VCRS(
             planeUp,
-            targetPlaneNormal
+            orbitVelVec
         ).
 
-    IF planePositionDot > 1 {
-        SET planePositionDot TO 1.
-    }.
-
-    IF planePositionDot < -1 {
-        SET planePositionDot TO -1.
-    }.
-
-    SET crossPositionAngle TO
-        ARCSIN(
-            planePositionDot
-        ).
-
-    SET crossPositionM TO
-        (
-            SHIP:BODY:RADIUS +
-            SHIP:ALTITUDE
-        )
-        *
-        crossPositionAngle
-        *
-        CONSTANT:DEGTORAD.
-
-    SET crossTrackAxis TO
-        targetPlaneNormal -
-        (
-            planeUp *
-            planePositionDot
-        ).
-
-    IF crossTrackAxis:MAG <
+    IF inclinationNormalUnit:MAG <
        0.000001 {
 
-        SET crossTrackAxis TO
+        SET inclinationNormalUnit TO
             targetPlaneNormal.
+
+    } ELSE {
+
+        SET inclinationNormalUnit TO
+            inclinationNormalUnit:NORMALIZED.
     }.
 
-    SET crossTrackAxis TO
-        crossTrackAxis:NORMALIZED.
-
-    SET crossVelocity TO
-        VDOT(
-            orbitVelVec,
-            crossTrackAxis
+    SET plusIncProbeVel TO
+        orbitVelVec +
+        (
+            inclinationNormalUnit *
+            inclinationProbeDv
         ).
 
-    SET crossTargetVelocity TO
-        -
-        crossPositionM /
-        crossTrackPositionTime.
-
-    IF crossTargetVelocity >
-       crossTrackVelocityLimit {
-
-        SET crossTargetVelocity TO
-            crossTrackVelocityLimit.
-    }.
-
-    IF crossTargetVelocity <
-       -crossTrackVelocityLimit {
-
-        SET crossTargetVelocity TO
-            -crossTrackVelocityLimit.
-    }.
-
-    SET crossAccelRaw TO
+    SET minusIncProbeVel TO
+        orbitVelVec -
         (
-            crossTargetVelocity -
-            crossVelocity
+            inclinationNormalUnit *
+            inclinationProbeDv
+        ).
+
+    SET plusIncProbeNormal TO
+        VCRS(
+            planeUp,
+            plusIncProbeVel
+        ).
+
+    SET minusIncProbeNormal TO
+        VCRS(
+            planeUp,
+            minusIncProbeVel
+        ).
+
+    IF plusIncProbeNormal:MAG >
+       0.000001 {
+
+        SET plusIncProbeNormal TO
+            plusIncProbeNormal:NORMALIZED.
+    }.
+
+    IF minusIncProbeNormal:MAG >
+       0.000001 {
+
+        SET minusIncProbeNormal TO
+            minusIncProbeNormal:NORMALIZED.
+    }.
+
+    SET plusProbeInclination TO
+        VANG(
+            plusIncProbeNormal,
+            bodyPoleNow
+        ).
+
+    SET minusProbeInclination TO
+        VANG(
+            minusIncProbeNormal,
+            bodyPoleNow
+        ).
+
+    SET inclinationDerivative TO
+        (
+            plusProbeInclination -
+            minusProbeInclination
         )
         /
-        crossTrackVelocityTime.
+        (
+            2 *
+            inclinationProbeDv
+        ).
 
-    SET crossAccelAllowed TO TRUE.
+    SET idealInclinationDerivative TO 0.
+
+    IF tangentialVel > 1 {
+
+        SET idealInclinationDerivative TO
+            57.2957795 /
+            tangentialVel.
+    }.
+
+    SET inclinationEffectiveness TO 0.
+
+    IF idealInclinationDerivative >
+       0.0000001 {
+
+        SET inclinationEffectiveness TO
+            ABS(
+                inclinationDerivative
+            )
+            /
+            idealInclinationDerivative.
+    }.
+
+    IF inclinationEffectiveness > 1 {
+        SET inclinationEffectiveness TO 1.
+    }.
+
+    IF inclinationEffectiveness < 0 {
+        SET inclinationEffectiveness TO 0.
+    }.
+
+    SET inclinationAccelRaw TO 0.
+
+    IF ABS(
+        inclinationDerivative
+       ) >=
+       inclinationDerivativeFloor {
+
+        SET inclinationAccelRaw TO
+            (
+                inclinationError /
+                (
+                    inclinationDerivative *
+                    upperInclinationTimeConstant
+                )
+            )
+            *
+            (
+                inclinationEffectiveness^2
+            ).
+    }.
+
+    SET inclinationAccelAllowed TO TRUE.
 
     IF SHIP:Q >
-       upperCrossTrackMaxQ {
+       upperInclinationMaxQ {
 
-        SET crossAccelAllowed TO FALSE.
+        SET inclinationAccelAllowed TO FALSE.
     }.
 
     IF ABS(
         STEERINGMANAGER:ANGLEERROR
        ) >
-       upperCrossTrackMaxSteerError {
+       upperInclinationMaxSteerError {
 
-        SET crossAccelAllowed TO FALSE.
+        SET inclinationAccelAllowed TO FALSE.
     }.
 
-    IF NOT crossAccelAllowed {
+    IF NOT inclinationAccelAllowed {
 
-        SET crossAccelRaw TO 0.
+        SET inclinationAccelRaw TO 0.
     }.
 
-    SET upperCrossAccelFiltered TO
-        upperCrossAccelFiltered
+    SET upperInclinationAccelFiltered TO
+        upperInclinationAccelFiltered
         +
-        crossTrackFilterGain
+        inclinationFilterGain
         *
         (
-            crossAccelRaw -
-            upperCrossAccelFiltered
+            inclinationAccelRaw -
+            upperInclinationAccelFiltered
         ).
 
-    SET maxCrossAccelByYaw TO
+    SET maxInclinationAccelByYaw TO
         poweredAccel *
         TAN(
-            upperCrossTrackMaxYaw
+            upperInclinationMaxYaw
         ).
 
-    SET crossAccelCmd TO
-        upperCrossAccelFiltered.
+    SET inclinationAccelCmd TO
+        upperInclinationAccelFiltered.
 
-    IF crossAccelCmd >
-       maxCrossAccelByYaw {
+    IF inclinationAccelCmd >
+       maxInclinationAccelByYaw {
 
-        SET crossAccelCmd TO
-            maxCrossAccelByYaw.
+        SET inclinationAccelCmd TO
+            maxInclinationAccelByYaw.
     }.
 
-    IF crossAccelCmd <
-       -maxCrossAccelByYaw {
+    IF inclinationAccelCmd <
+       -maxInclinationAccelByYaw {
 
-        SET crossAccelCmd TO
-            -maxCrossAccelByYaw.
+        SET inclinationAccelCmd TO
+            -maxInclinationAccelByYaw.
     }.
 
     SET desiredSteeringVec TO
@@ -1700,8 +1775,8 @@ UNTIL ascentDone {
         )
         +
         (
-            crossTrackAxis *
-            crossAccelCmd
+            inclinationNormalUnit *
+            inclinationAccelCmd
         ).
 
     IF desiredSteeringVec:MAG >
@@ -1742,7 +1817,7 @@ UNTIL ascentDone {
 
         SET actualTrimYaw TO
             ARCTAN2(
-                crossAccelCmd,
+                inclinationAccelCmd,
                 poweredAccel
             ).
     }.
@@ -1754,11 +1829,11 @@ UNTIL ascentDone {
             ROUND(MISSIONTIME,3) + "," +
             ROUND(SHIP:ALTITUDE,3) + "," +
             ROUND(SHIP:OBT:INCLINATION,7) + "," +
-            ROUND(planeAngleError,7) + "," +
-            ROUND(crossPositionM,3) + "," +
-            ROUND(crossVelocity,5) + "," +
-            ROUND(crossTargetVelocity,5) + "," +
-            ROUND(crossAccelCmd,6) + "," +
+            ROUND(currentInclination,7) + "," +
+            ROUND(inclinationError,7) + "," +
+            ROUND(inclinationDerivative,7) + "," +
+            ROUND(inclinationEffectiveness,5) + "," +
+            ROUND(inclinationAccelCmd,6) + "," +
             ROUND(actualTrimYaw,5) + "," +
             ROUND(pitchCmd,5) + "," +
             ROUND(throttleCmd,7) + "," +
@@ -1825,21 +1900,21 @@ UNTIL ascentDone {
         AT(0,13).
 
     PRINT
-        "XPOS: " +
+        "INC ERR: " +
         ROUND(
-            crossPositionM,
-            1
+            inclinationError,
+            4
         ) +
-        " m        "
+        " deg      "
         AT(0,14).
 
     PRINT
-        "XVEL: " +
+        "INC EFF: " +
         ROUND(
-            crossVelocity,
-            2
+            inclinationEffectiveness,
+            3
         ) +
-        " m/s      "
+        "          "
         AT(0,15).
 
     PRINT
@@ -1957,7 +2032,7 @@ SET exhaustVelocity TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.9 ACQUISITION =====".
+PRINT "===== SV-6.0 ACQUISITION =====".
 
 SET terminalStart TO FALSE.
 SET lastLog TO MISSIONTIME.
@@ -2138,7 +2213,7 @@ UNTIL terminalStart {
 }.
 
 // ======================================================
-// SV-5.9 TERMINAL
+// SV-6.0 TERMINAL
 //
 // Proven radial/tangential SV-3.3 controller with a small
 // normal component layered on as a yaw bias.  The normal
@@ -2149,12 +2224,12 @@ UNTIL terminalStart {
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.9 TERMINAL =====".
+PRINT "===== SV-6.0 TERMINAL =====".
 
 SET terminalStartMET TO
     MISSIONTIME.
 
-SET terminalCrossAccelFiltered TO 0.
+SET terminalInclinationAccelFiltered TO 0.
 
 SET guidanceVec TO
     SHIP:PROGRADE:VECTOR.
@@ -2701,128 +2776,202 @@ UNTIL terminalComplete
         orbitGuidanceVec:MAG.
 
     // --------------------------------------------------
-    // DAMPED CROSS-TRACK PD TRIM
+    // INCLINATION-ONLY NORMAL TRIM
     //
-    // Same path-state controller as upper-stage ascent,
-    // but its authority is tied to the radial/tangential
-    // command already being flown.  As insertion thrust
-    // decays, cross-track authority decays with it.
+    // The mission requests inclination, not LAN.  Control
+    // only that scalar orbital element and leave the node
+    // longitude produced by the direct launch unconstrained.
     // --------------------------------------------------
 
-    SET planePositionDot TO
-        VDOT(
+    SET inclinationError TO
+        targetInclination -
+        currentInclination.
+
+    SET bodyPoleNow TO
+        SHIP:BODY:ANGULARVEL.
+
+    IF bodyPoleNow:MAG <
+       0.0000001 {
+
+        SET bodyPoleNow TO
+            inertialPole0.
+
+    } ELSE {
+
+        SET bodyPoleNow TO
+            bodyPoleNow:NORMALIZED.
+    }.
+
+    SET inclinationNormalUnit TO
+        VCRS(
             upVec,
-            targetPlaneNormal
+            orbitVelVec
         ).
 
-    IF planePositionDot > 1 {
-        SET planePositionDot TO 1.
-    }.
-
-    IF planePositionDot < -1 {
-        SET planePositionDot TO -1.
-    }.
-
-    SET crossPositionAngle TO
-        ARCSIN(
-            planePositionDot
-        ).
-
-    SET crossPositionM TO
-        radiusNow
-        *
-        crossPositionAngle
-        *
-        CONSTANT:DEGTORAD.
-
-    SET crossTrackAxis TO
-        targetPlaneNormal -
-        (
-            upVec *
-            planePositionDot
-        ).
-
-    IF crossTrackAxis:MAG <
+    IF inclinationNormalUnit:MAG <
        0.000001 {
 
-        SET crossTrackAxis TO
+        SET inclinationNormalUnit TO
             targetPlaneNormal.
+
+    } ELSE {
+
+        SET inclinationNormalUnit TO
+            inclinationNormalUnit:NORMALIZED.
     }.
 
-    SET crossTrackAxis TO
-        crossTrackAxis:NORMALIZED.
-
-    SET crossVelocity TO
-        VDOT(
-            orbitVelVec,
-            crossTrackAxis
+    SET plusIncProbeVel TO
+        orbitVelVec +
+        (
+            inclinationNormalUnit *
+            inclinationProbeDv
         ).
 
-    SET crossTargetVelocity TO
-        -
-        crossPositionM /
-        crossTrackPositionTime.
-
-    IF crossTargetVelocity >
-       crossTrackVelocityLimit {
-
-        SET crossTargetVelocity TO
-            crossTrackVelocityLimit.
-    }.
-
-    IF crossTargetVelocity <
-       -crossTrackVelocityLimit {
-
-        SET crossTargetVelocity TO
-            -crossTrackVelocityLimit.
-    }.
-
-    SET crossAccelRaw TO
+    SET minusIncProbeVel TO
+        orbitVelVec -
         (
-            crossTargetVelocity -
-            crossVelocity
+            inclinationNormalUnit *
+            inclinationProbeDv
+        ).
+
+    SET plusIncProbeNormal TO
+        VCRS(
+            upVec,
+            plusIncProbeVel
+        ).
+
+    SET minusIncProbeNormal TO
+        VCRS(
+            upVec,
+            minusIncProbeVel
+        ).
+
+    IF plusIncProbeNormal:MAG >
+       0.000001 {
+
+        SET plusIncProbeNormal TO
+            plusIncProbeNormal:NORMALIZED.
+    }.
+
+    IF minusIncProbeNormal:MAG >
+       0.000001 {
+
+        SET minusIncProbeNormal TO
+            minusIncProbeNormal:NORMALIZED.
+    }.
+
+    SET plusProbeInclination TO
+        VANG(
+            plusIncProbeNormal,
+            bodyPoleNow
+        ).
+
+    SET minusProbeInclination TO
+        VANG(
+            minusIncProbeNormal,
+            bodyPoleNow
+        ).
+
+    SET inclinationDerivative TO
+        (
+            plusProbeInclination -
+            minusProbeInclination
         )
         /
-        crossTrackVelocityTime.
-
-    SET terminalCrossAccelFiltered TO
-        terminalCrossAccelFiltered
-        +
-        crossTrackFilterGain
-        *
         (
-            crossAccelRaw -
-            terminalCrossAccelFiltered
+            2 *
+            inclinationProbeDv
         ).
 
-    SET maxCrossAccelByYaw TO
-        baseCommandAccel *
-        TAN(
-            terminalCrossTrackMaxYaw
-        ).
+    SET idealInclinationDerivative TO 0.
 
-    SET crossAccelCmd TO
-        terminalCrossAccelFiltered.
+    IF tangentialVel > 1 {
 
-    IF crossAccelCmd >
-       maxCrossAccelByYaw {
-
-        SET crossAccelCmd TO
-            maxCrossAccelByYaw.
+        SET idealInclinationDerivative TO
+            57.2957795 /
+            tangentialVel.
     }.
 
-    IF crossAccelCmd <
-       -maxCrossAccelByYaw {
+    SET inclinationEffectiveness TO 0.
 
-        SET crossAccelCmd TO
-            -maxCrossAccelByYaw.
+    IF idealInclinationDerivative >
+       0.0000001 {
+
+        SET inclinationEffectiveness TO
+            ABS(
+                inclinationDerivative
+            )
+            /
+            idealInclinationDerivative.
+    }.
+
+    IF inclinationEffectiveness > 1 {
+        SET inclinationEffectiveness TO 1.
+    }.
+
+    IF inclinationEffectiveness < 0 {
+        SET inclinationEffectiveness TO 0.
+    }.
+
+    SET inclinationAccelRaw TO 0.
+
+    IF ABS(
+        inclinationDerivative
+       ) >=
+       inclinationDerivativeFloor {
+
+        SET inclinationAccelRaw TO
+            (
+                inclinationError /
+                (
+                    inclinationDerivative *
+                    terminalInclinationTimeConstant
+                )
+            )
+            *
+            (
+                inclinationEffectiveness^2
+            ).
+    }.
+
+    SET terminalInclinationAccelFiltered TO
+        terminalInclinationAccelFiltered
+        +
+        inclinationFilterGain
+        *
+        (
+            inclinationAccelRaw -
+            terminalInclinationAccelFiltered
+        ).
+
+    SET maxInclinationAccelByYaw TO
+        baseCommandAccel *
+        TAN(
+            terminalInclinationMaxYaw
+        ).
+
+    SET inclinationAccelCmd TO
+        terminalInclinationAccelFiltered.
+
+    IF inclinationAccelCmd >
+       maxInclinationAccelByYaw {
+
+        SET inclinationAccelCmd TO
+            maxInclinationAccelByYaw.
+    }.
+
+    IF inclinationAccelCmd <
+       -maxInclinationAccelByYaw {
+
+        SET inclinationAccelCmd TO
+            -maxInclinationAccelByYaw.
     }.
 
     SET guidanceVec TO
         orbitGuidanceVec +
         (
-            crossTrackAxis *
-            crossAccelCmd
+            inclinationNormalUnit *
+            inclinationAccelCmd
         ).
 
     SET commandAccel TO
@@ -2835,7 +2984,7 @@ UNTIL terminalComplete
 
         SET actualTrimYaw TO
             ARCTAN2(
-                crossAccelCmd,
+                inclinationAccelCmd,
                 baseCommandAccel
             ).
     }.
@@ -3078,7 +3227,7 @@ UNTIL terminalComplete
     // --------------------------------------------------
 
     PRINT
-        "===== SV-5.9 TERMINAL ====="
+        "===== SV-6.0 TERMINAL ====="
         AT(0,2).
 
     IF captureActive {
@@ -3191,21 +3340,21 @@ UNTIL terminalComplete
         AT(0,15).
 
     PRINT
-        "XPOS: " +
+        "INC ERR: " +
         ROUND(
-            crossPositionM,
-            1
+            inclinationError,
+            5
         ) +
-        " m        "
+        " deg      "
         AT(0,16).
 
     PRINT
-        "XVEL: " +
+        "INC EFF: " +
         ROUND(
-            crossVelocity,
-            2
+            inclinationEffectiveness,
+            3
         ) +
-        " m/s      "
+        "          "
         AT(0,17).
 
     PRINT
@@ -3263,11 +3412,11 @@ UNTIL terminalComplete
             actuatorText + "," +
             ROUND(SHIP:ALTITUDE,3) + "," +
             ROUND(currentInclination,7) + "," +
-            ROUND(planeAngleError,7) + "," +
-            ROUND(crossPositionM,3) + "," +
-            ROUND(crossVelocity,5) + "," +
-            ROUND(crossTargetVelocity,5) + "," +
-            ROUND(crossAccelCmd,6) + "," +
+            ROUND(currentInclination,7) + "," +
+            ROUND(inclinationError,7) + "," +
+            ROUND(inclinationDerivative,7) + "," +
+            ROUND(inclinationEffectiveness,5) + "," +
+            ROUND(inclinationAccelCmd,6) + "," +
             ROUND(actualTrimYaw,5) + "," +
             ROUND(radialVel,5) + "," +
             ROUND(tangentialVel,5) + "," +
@@ -3303,7 +3452,7 @@ UNTIL terminalComplete
        lastFlightLog >= 0.5 {
 
         logState(
-            "SV59_GUIDANCE"
+            "SV60_GUIDANCE"
         ).
 
         SET lastFlightLog TO
@@ -3354,7 +3503,7 @@ IF finalTangentialVec:MAG > 1 {
 
 WAIT 0.25.
 
-logState("SV59_CUTOFF").
+logState("SV60_CUTOFF").
 
 UNLOCK STEERING.
 
@@ -3411,7 +3560,7 @@ SET finalPlaneAngle TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.9 GUIDANCE COMPLETE =====".
+PRINT "===== SV-6.0 GUIDANCE COMPLETE =====".
 PRINT "".
 PRINT "Target:         " + ROUND(orbitTarget/1000,2) + " km @ " + ROUND(targetInclination,3) + " deg".
 PRINT "".
@@ -3422,13 +3571,8 @@ PRINT "".
 PRINT "Ap error:       " + ROUND(finalApError,2) + " m".
 PRINT "Pe error:       " + ROUND(finalPeError,2) + " m".
 PRINT "Inc error:      " + ROUND(targetInclination - finalInc,7) + " deg".
-PRINT "Plane error:    " + ROUND(finalPlaneAngle,7) + " deg".
-
-IF finalPlaneAngle <= planeResidualReportTolerance {
-    PRINT "Plane status:   IN TOLERANCE".
-} ELSE {
-    PRINT "Plane status:   RESIDUAL - TUNE LAUNCH/TRIM".
-}.
+PRINT "Plane geom err: " + ROUND(finalPlaneAngle,7) + " deg".
+PRINT "Inc status:     TARGETED DIRECTLY".
 
 PRINT "".
 PRINT "Remaining dV:   " + ROUND(SHIP:DELTAV:CURRENT,1) + " m/s".
@@ -3442,12 +3586,12 @@ IF terminalComplete {
 
 PRINT "".
 PRINT "FLIGHT LOG:".
-PRINT "0:/sv59flight.csv".
+PRINT "0:/sv60flight.csv".
 PRINT "".
 PRINT "GUIDANCE LOG:".
-PRINT "0:/sv59guidance.csv".
+PRINT "0:/sv60guidance.csv".
 PRINT "".
 PRINT "ASCENT LOG:".
-PRINT "0:/sv59ascent.csv".
+PRINT "0:/sv60ascent.csv".
 
 logState("FINAL").
