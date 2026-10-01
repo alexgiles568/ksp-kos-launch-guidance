@@ -181,9 +181,12 @@ SET radialAccelLimit TO 6.
 // Previous tests bracketed the correct 30-deg solution:
 // full circular-speed compensation undershot inclination,
 // while low/current-speed compensation overcorrected.
-// SV-5.5 at 1800 m/s reached ~29.0 deg at booster burnout.
-// SV-5.8 moves the reference to 1500 m/s; the upper-stage
-// yaw loop then removes the remaining small residual.
+// Flight calibration:
+//   SV-5.5: 1800 m/s -> 28.9995 deg booster burnout
+//   SV-5.6: 1500 m/s -> 29.6077 deg booster burnout
+//   SV-5.7: 1300 m/s -> 30.1904 deg booster burnout
+// Linear interpolation puts the 30-deg reference near
+// 1365 m/s.  Upper-stage yaw trim removes the residual.
 
 SET launchPlaneReferenceSpeed TO 1365.
 
