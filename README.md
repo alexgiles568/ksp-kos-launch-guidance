@@ -40,3 +40,5 @@ See `HISTORY.md` for flight-test notes and status.
 ## Repository policy
 
 `sv33_reference.ks` and `sv401_equatorial_reference.ks` are frozen regression references. New work should branch from them rather than changing the reference files in place.
+
+- **SV-5.9** — current development branch: 1365 m/s direct launch plus damped cross-track position/velocity yaw trim layered onto SV-3.3 insertion guidance.
