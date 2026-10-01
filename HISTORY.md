@@ -238,3 +238,21 @@
 - Smooth effectiveness weighting fades correction where normal thrust mostly changes LAN instead of inclination.
 - Upper-stage and terminal trim remain yaw-limited and subordinate to the existing insertion burn.
 - SV-3.3 radial/tangential guidance is unchanged.
+
+## SV-6.0 validation series
+
+- **30° PASS** — final 80.00017 × 79.99029 km, inclination 29.996637°.
+- **45° PASS** — final 80.00027 × 79.99057 km, inclination 44.974753°.
+- **90° ORBIT PASS / INCLINATION MISS** — final 80.00021 × 79.99048 km, inclination 88.523229°.
+- The 90° logs showed booster burnout around 88.8093°, upper-stage cutoff around 87.6882°, then correct-direction terminal recovery to 88.52°.
+- This isolated the remaining issue: the trim loop targeted inclination directly, but nominal ascent still followed a frozen full plane / LAN.
+
+## SV-6.1 — local inclination-course ascent
+
+- Removes the frozen full-plane tangent from booster and upper-stage base steering.
+- Computes local inertial course directly from target inclination and current latitude using `east = cos(i) / cos(latitude)`.
+- ASCENDING / DESCENDING selects the sign of the north component.
+- The nominal trajectory no longer fixes LAN / RAAN as Kerbin rotates.
+- Keeps the successful 1365 m/s rotation-compensation reference and delayed upper-stage ignition.
+- Keeps SV-6.0's numerical inclination-only normal trim for residual powered-flight correction.
+- Frozen target-plane geometry remains diagnostic only.
