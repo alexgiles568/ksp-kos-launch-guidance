@@ -1,5 +1,5 @@
 // ======================================================
-// SV-5.8 MISSION CONFIG
+// SV-5.9 MISSION CONFIG
 // 0.625 m TWO-STAGE LIQUID LAUNCHER
 //
 // CONFIGURABLE:
@@ -9,22 +9,22 @@
 //
 // Derived from successful SV-4.0.1 / SV-3.3 guidance.
 //
-// SV-5.8:
-// - Fixes the SV-5.7 upper-stage loss of control by
-//   delaying booster separation / upper ignition until
-//   dynamic pressure is much lower.
-// - Recalibrates direct-plane launch from the SV-5.6/5.7
-//   booster results: 1365 m/s is the interpolated 30-deg
-//   reference speed.
-// - The terminal yaw oscillation was a threshold-driven
-//   limit cycle, not simply an underdamped steering PID.
-// - Plane trim now uses a hysteretic single correction
-//   window: enter only at useful geometry, then stop when
-//   effectiveness falls and do not chatter back on.
-// - Upper-stage plane trim is inhibited above 0.015 atm
-//   and while steering alignment is poor.
-// - Yaw authority is reduced after the aggressive SV-5.7
-//   test while retaining the corrected local-dV law.
+// SV-5.9:
+// - Keeps the SV-5.8 1365 m/s launch calibration; that
+//   produced 29.988 deg at booster burnout.
+// - Replaces the orbital-normal effectiveness/window trim
+//   with a low-gain CROSS-TRACK PD controller.
+// - The controller directly damps signed distance from the
+//   target inertial plane and cross-plane velocity.
+// - This fixes the late-burn behavior where the old node
+//   trim reduced total plane angle while moving inclination
+//   away from 30 deg.
+// - Cross-track correction is continuous and smooth rather
+//   than threshold-switched, with explicit velocity damping,
+//   command filtering, and a 2-deg yaw cap.
+// - The correction remains tied to the existing upper-stage
+//   / terminal insertion burn; it cannot become a separate
+//   plane-change burn.
 // - SV-3.3 radial/tangential insertion remains unchanged.
 //
 // ======================================================
@@ -46,7 +46,7 @@ SET configGui:X TO 50.
 SET configGui:Y TO 80.
 SET configGui:DRAGGABLE TO TRUE.
 
-SET titleLabel TO configGui:ADDLABEL("SV-5.8 LAUNCH GUIDANCE").
+SET titleLabel TO configGui:ADDLABEL("SV-5.9 LAUNCH GUIDANCE").
 SET titleLabel:STYLE:ALIGN TO "CENTER".
 SET titleLabel:STYLE:HSTRETCH TO TRUE.
 
@@ -194,19 +194,29 @@ SET launchPlaneReferenceSpeed TO 1365.
 // second-stage burn.  It is never allowed to become a
 // dedicated plane-change maneuver.
 
-SET planeProbeDv TO 1.
-SET planeTrimEnableEffectiveness TO 0.18.
-SET planeTrimDisableEffectiveness TO 0.10.
+// Cross-track path controller.
+//
+// position error:
+//   signed perpendicular distance from the vehicle's
+//   current radius vector to the fixed target plane.
+//
+// velocity error:
+//   signed inertial velocity perpendicular to that plane.
+//
+// The long position time constant keeps this a gentle yaw
+// trim rather than a dogleg.  Velocity feedback supplies
+// the damping that the earlier branches were missing.
 
-SET upperPlaneTrimMaxQ TO 0.015.
-SET upperPlaneTrimMaxSteerError TO 5.
+SET crossTrackPositionTime TO 120.
+SET crossTrackVelocityTime TO 12.
+SET crossTrackVelocityLimit TO 20.
+SET crossTrackFilterGain TO 0.12.
 
-SET upperPlaneTrimTimeConstant TO 12.
-SET upperPlaneTrimMaxYaw TO 3.
-SET upperPlaneTrimMaxYawHighQ TO 0.
+SET upperCrossTrackMaxQ TO 0.015.
+SET upperCrossTrackMaxSteerError TO 6.
+SET upperCrossTrackMaxYaw TO 2.
 
-SET terminalPlaneTrimTimeFloor TO 8.
-SET terminalPlaneTrimMaxYaw TO 3.
+SET terminalCrossTrackMaxYaw TO 2.
 
 SET planeResidualReportTolerance TO 0.05.
 SET terminalIgnitionSteerError TO 8.
@@ -249,10 +259,8 @@ SET fineLatched TO FALSE.
 SET captureActive TO FALSE.
 SET captureStartMET TO 0.
 
-SET upperPlaneTrimActive TO FALSE.
-SET upperPlaneTrimWindowClosed TO FALSE.
-SET terminalPlaneTrimActive TO FALSE.
-SET terminalPlaneTrimWindowClosed TO FALSE.
+SET upperCrossAccelFiltered TO 0.
+SET terminalCrossAccelFiltered TO 0.
 
 SET lowDvStart TO -1.
 
@@ -265,9 +273,9 @@ SET thrustActive TO TRUE.
 // LOG FILES
 // ======================================================
 
-SET flightLog TO "0:/sv58flight.csv".
-SET guidanceLog TO "0:/sv58guidance.csv".
-SET ascentLog TO "0:/sv58ascent.csv".
+SET flightLog TO "0:/sv59flight.csv".
+SET guidanceLog TO "0:/sv59guidance.csv".
+SET ascentLog TO "0:/sv59ascent.csv".
 
 IF EXISTS(flightLog) {
     DELETEPATH(flightLog).
@@ -286,11 +294,11 @@ LOG
 TO flightLog.
 
 LOG
-"MET,mode,actuator,alt_m,inc_deg,plane_angle_err_deg,plane_effectiveness_ratio,plane_trim_active,plane_trim_window_closed,plane_trim_accel_mps2,plane_trim_yaw_deg,radial_vel_mps,tangential_vel_mps,circular_vel_mps,tangential_error_mps,tgo_s,natural_radial_accel,radial_req_accel,tangential_req_accel,radial_alloc_accel,tangential_alloc_accel,max_accel,base_command_accel,total_command_accel,throttle,ap_m,pe_m,ap_error_m,pe_error_m,fine_latched,capture,steer_angle_err_deg"
+"MET,mode,actuator,alt_m,inc_deg,plane_angle_err_deg,cross_pos_m,cross_vel_mps,cross_target_vel_mps,cross_accel_cmd_mps2,cross_trim_yaw_deg,radial_vel_mps,tangential_vel_mps,circular_vel_mps,tangential_error_mps,tgo_s,natural_radial_accel,radial_req_accel,tangential_req_accel,radial_alloc_accel,tangential_alloc_accel,max_accel,base_command_accel,total_command_accel,throttle,ap_m,pe_m,ap_error_m,pe_error_m,fine_latched,capture,steer_angle_err_deg"
 TO guidanceLog.
 
 LOG
-"MET,alt_m,inc_deg,plane_angle_err_deg,local_plane_dv_mps,plane_effectiveness_ratio,plane_trim_active,plane_trim_window_closed,plane_trim_accel_mps2,plane_trim_yaw_deg,pitch_cmd_deg,throttle,q_atm,ap_m,eta_ap_s,surfspd_mps,radial_vel_mps,tangential_vel_mps,steer_angle_err_deg"
+"MET,alt_m,inc_deg,plane_angle_err_deg,cross_pos_m,cross_vel_mps,cross_target_vel_mps,cross_accel_cmd_mps2,cross_trim_yaw_deg,pitch_cmd_deg,throttle,q_atm,ap_m,eta_ap_s,surfspd_mps,radial_vel_mps,tangential_vel_mps,steer_angle_err_deg"
 TO ascentLog.
 
 // ======================================================
@@ -740,7 +748,7 @@ SET guidanceAzimuth TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.8 MISSION =====".
+PRINT "===== SV-5.9 MISSION =====".
 PRINT "".
 PRINT "TARGET ALT: " + ROUND(orbitTarget / 1000,2) + " km".
 PRINT "TARGET INC: " + ROUND(targetInclination,3) + " deg".
@@ -1358,7 +1366,7 @@ UNTIL ascentDone {
     }.
 
     // Local dV required at the current geometry.
-    // This is the key SV-5.8 gain fix.  SV-5.5 multiplied
+    // This is the key SV-5.9 gain fix.  SV-5.5 multiplied
     // ideal plane dV by effectiveness, which REDUCED the
     // command exactly when geometry made each m/s less
     // effective.  The numerical derivative already tells
@@ -1544,74 +1552,140 @@ UNTIL ascentDone {
         throttleCmd.
 
     // --------------------------------------------------
-    // DAMPED PLANE-TRIM WINDOW
-    //
-    // SV-5.7 repeatedly crossed a hard effectiveness
-    // threshold and switched the normal command on/off.
-    // That produced a visible yaw limit cycle.
-    //
-    // SV-5.8 permits one useful correction window. Once
-    // geometry degrades below the disable threshold, trim
-    // stays off for the rest of upper-stage ascent.
+    // DAMPED CROSS-TRACK PD TRIM
     // --------------------------------------------------
 
-    IF NOT upperPlaneTrimWindowClosed {
-
-        IF NOT upperPlaneTrimActive
-           AND SHIP:Q <= upperPlaneTrimMaxQ
-           AND STEERINGMANAGER:ANGLEERROR <=
-               upperPlaneTrimMaxSteerError
-           AND planeEffectivenessRatio >=
-               planeTrimEnableEffectiveness {
-
-            SET upperPlaneTrimActive TO TRUE.
-        }.
-
-        IF upperPlaneTrimActive
-           AND (
-               planeEffectivenessRatio <=
-                   planeTrimDisableEffectiveness
-               OR SHIP:Q > upperPlaneTrimMaxQ
-               OR STEERINGMANAGER:ANGLEERROR >
-                   upperPlaneTrimMaxSteerError
-           ) {
-
-            SET upperPlaneTrimActive TO FALSE.
-            SET upperPlaneTrimWindowClosed TO TRUE.
-        }.
-    }.
-
-    SET requestedPlaneAccel TO 0.
-
-    IF upperPlaneTrimActive
-       AND planeAngleError > 0.000001 {
-
-        SET requestedPlaneAccel TO
-            localPlaneDvEstimate /
-            upperPlaneTrimTimeConstant.
-    }.
-
-    SET activePlaneYawLimit TO
-        upperPlaneTrimMaxYaw.
-
-    SET maxPlaneAccelByYaw TO
-        poweredAccel *
-        TAN(
-            activePlaneYawLimit
+    SET planePositionDot TO
+        VDOT(
+            planeUp,
+            targetPlaneNormal
         ).
 
-    SET planeTrimAccel TO
-        requestedPlaneAccel.
-
-    IF planeTrimAccel >
-       maxPlaneAccelByYaw {
-
-        SET planeTrimAccel TO
-            maxPlaneAccelByYaw.
+    IF planePositionDot > 1 {
+        SET planePositionDot TO 1.
     }.
 
-    IF planeTrimAccel < 0 {
-        SET planeTrimAccel TO 0.
+    IF planePositionDot < -1 {
+        SET planePositionDot TO -1.
+    }.
+
+    SET crossPositionAngle TO
+        ARCSIN(
+            planePositionDot
+        ).
+
+    SET crossPositionM TO
+        (
+            SHIP:BODY:RADIUS +
+            SHIP:ALTITUDE
+        )
+        *
+        crossPositionAngle
+        *
+        CONSTANT:DEGTORAD.
+
+    SET crossTrackAxis TO
+        targetPlaneNormal -
+        (
+            planeUp *
+            planePositionDot
+        ).
+
+    IF crossTrackAxis:MAG <
+       0.000001 {
+
+        SET crossTrackAxis TO
+            targetPlaneNormal.
+    }.
+
+    SET crossTrackAxis TO
+        crossTrackAxis:NORMALIZED.
+
+    SET crossVelocity TO
+        VDOT(
+            orbitVelVec,
+            crossTrackAxis
+        ).
+
+    SET crossTargetVelocity TO
+        -
+        crossPositionM /
+        crossTrackPositionTime.
+
+    IF crossTargetVelocity >
+       crossTrackVelocityLimit {
+
+        SET crossTargetVelocity TO
+            crossTrackVelocityLimit.
+    }.
+
+    IF crossTargetVelocity <
+       -crossTrackVelocityLimit {
+
+        SET crossTargetVelocity TO
+            -crossTrackVelocityLimit.
+    }.
+
+    SET crossAccelRaw TO
+        (
+            crossTargetVelocity -
+            crossVelocity
+        )
+        /
+        crossTrackVelocityTime.
+
+    SET crossAccelAllowed TO TRUE.
+
+    IF SHIP:Q >
+       upperCrossTrackMaxQ {
+
+        SET crossAccelAllowed TO FALSE.
+    }.
+
+    IF ABS(
+        STEERINGMANAGER:ANGLEERROR
+       ) >
+       upperCrossTrackMaxSteerError {
+
+        SET crossAccelAllowed TO FALSE.
+    }.
+
+    IF NOT crossAccelAllowed {
+
+        SET crossAccelRaw TO 0.
+    }.
+
+    SET upperCrossAccelFiltered TO
+        upperCrossAccelFiltered
+        +
+        crossTrackFilterGain
+        *
+        (
+            crossAccelRaw -
+            upperCrossAccelFiltered
+        ).
+
+    SET maxCrossAccelByYaw TO
+        poweredAccel *
+        TAN(
+            upperCrossTrackMaxYaw
+        ).
+
+    SET crossAccelCmd TO
+        upperCrossAccelFiltered.
+
+    IF crossAccelCmd >
+       maxCrossAccelByYaw {
+
+        SET crossAccelCmd TO
+            maxCrossAccelByYaw.
+    }.
+
+    IF crossAccelCmd <
+       -maxCrossAccelByYaw {
+
+        SET crossAccelCmd TO
+            -maxCrossAccelByYaw.
     }.
 
     SET desiredSteeringVec TO
@@ -1621,8 +1695,8 @@ UNTIL ascentDone {
         )
         +
         (
-            planeCorrectionUnit *
-            planeTrimAccel
+            crossTrackAxis *
+            crossAccelCmd
         ).
 
     IF desiredSteeringVec:MAG >
@@ -1663,7 +1737,7 @@ UNTIL ascentDone {
 
         SET actualTrimYaw TO
             ARCTAN2(
-                planeTrimAccel,
+                crossAccelCmd,
                 poweredAccel
             ).
     }.
@@ -1676,11 +1750,10 @@ UNTIL ascentDone {
             ROUND(SHIP:ALTITUDE,3) + "," +
             ROUND(SHIP:OBT:INCLINATION,7) + "," +
             ROUND(planeAngleError,7) + "," +
-            ROUND(localPlaneDvEstimate,5) + "," +
-            ROUND(planeEffectivenessRatio,5) + "," +
-            upperPlaneTrimActive + "," +
-            upperPlaneTrimWindowClosed + "," +
-            ROUND(planeTrimAccel,6) + "," +
+            ROUND(crossPositionM,3) + "," +
+            ROUND(crossVelocity,5) + "," +
+            ROUND(crossTargetVelocity,5) + "," +
+            ROUND(crossAccelCmd,6) + "," +
             ROUND(actualTrimYaw,5) + "," +
             ROUND(pitchCmd,5) + "," +
             ROUND(throttleCmd,7) + "," +
@@ -1747,23 +1820,21 @@ UNTIL ascentDone {
         AT(0,13).
 
     PRINT
-        "PLN DV: " +
+        "XPOS: " +
         ROUND(
-            localPlaneDvEstimate,
-            2
+            crossPositionM,
+            1
         ) +
-        " m/s      "
+        " m        "
         AT(0,14).
 
     PRINT
-        "EFF: " +
+        "XVEL: " +
         ROUND(
-            planeEffectivenessRatio,
-            3
+            crossVelocity,
+            2
         ) +
-        " ACTIVE:" +
-        upperPlaneTrimActive +
-        "     "
+        " m/s      "
         AT(0,15).
 
     PRINT
@@ -1881,7 +1952,7 @@ SET exhaustVelocity TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.8 ACQUISITION =====".
+PRINT "===== SV-5.9 ACQUISITION =====".
 
 SET terminalStart TO FALSE.
 SET lastLog TO MISSIONTIME.
@@ -2062,7 +2133,7 @@ UNTIL terminalStart {
 }.
 
 // ======================================================
-// SV-5.8 TERMINAL
+// SV-5.9 TERMINAL
 //
 // Proven radial/tangential SV-3.3 controller with a small
 // normal component layered on as a yaw bias.  The normal
@@ -2073,13 +2144,12 @@ UNTIL terminalStart {
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.8 TERMINAL =====".
+PRINT "===== SV-5.9 TERMINAL =====".
 
 SET terminalStartMET TO
     MISSIONTIME.
 
-SET terminalPlaneTrimActive TO FALSE.
-SET terminalPlaneTrimWindowClosed TO FALSE.
+SET terminalCrossAccelFiltered TO 0.
 
 SET guidanceVec TO
     SHIP:PROGRADE:VECTOR.
@@ -2626,84 +2696,128 @@ UNTIL terminalComplete
         orbitGuidanceVec:MAG.
 
     // --------------------------------------------------
-    // LIMITED PLANE YAW TRIM
+    // DAMPED CROSS-TRACK PD TRIM
     //
-    // The trim can only be a small fraction of the burn
-    // already requested by radial/tangential guidance.
-    // Therefore it disappears automatically when the main
-    // insertion burn ends.
+    // Same path-state controller as upper-stage ascent,
+    // but its authority is tied to the radial/tangential
+    // command already being flown.  As insertion thrust
+    // decays, cross-track authority decays with it.
     // --------------------------------------------------
 
-    SET planeTrimAccel TO 0.
-
-    SET planeTrimTime TO
-        tGo.
-
-    IF planeTrimTime <
-       terminalPlaneTrimTimeFloor {
-
-        SET planeTrimTime TO
-            terminalPlaneTrimTimeFloor.
-    }.
-
-    // One terminal correction window.  Once local plane
-    // geometry falls through the disable threshold, do not
-    // re-enter trim during the same insertion burn.  This
-    // removes SV-5.7's repeated 0/5-degree yaw switching.
-
-    IF NOT terminalPlaneTrimWindowClosed {
-
-        IF NOT terminalPlaneTrimActive
-           AND planeEffectivenessRatio >=
-               planeTrimEnableEffectiveness {
-
-            SET terminalPlaneTrimActive TO TRUE.
-        }.
-
-        IF terminalPlaneTrimActive
-           AND planeEffectivenessRatio <=
-               planeTrimDisableEffectiveness {
-
-            SET terminalPlaneTrimActive TO FALSE.
-            SET terminalPlaneTrimWindowClosed TO TRUE.
-        }.
-    }.
-
-    SET requestedPlaneAccel TO 0.
-
-    IF terminalPlaneTrimActive
-       AND planeAngleError > 0.000001 {
-
-        SET requestedPlaneAccel TO
-            localPlaneDvEstimate /
-            planeTrimTime.
-    }.
-
-    SET maxPlaneAccelByYaw TO
-        baseCommandAccel *
-        TAN(
-            terminalPlaneTrimMaxYaw
+    SET planePositionDot TO
+        VDOT(
+            upVec,
+            targetPlaneNormal
         ).
 
-    SET planeTrimAccel TO
-        requestedPlaneAccel.
-
-    IF planeTrimAccel >
-       maxPlaneAccelByYaw {
-
-        SET planeTrimAccel TO
-            maxPlaneAccelByYaw.
+    IF planePositionDot > 1 {
+        SET planePositionDot TO 1.
     }.
 
-    IF planeTrimAccel < 0 {
-        SET planeTrimAccel TO 0.
+    IF planePositionDot < -1 {
+        SET planePositionDot TO -1.
+    }.
+
+    SET crossPositionAngle TO
+        ARCSIN(
+            planePositionDot
+        ).
+
+    SET crossPositionM TO
+        radiusNow
+        *
+        crossPositionAngle
+        *
+        CONSTANT:DEGTORAD.
+
+    SET crossTrackAxis TO
+        targetPlaneNormal -
+        (
+            upVec *
+            planePositionDot
+        ).
+
+    IF crossTrackAxis:MAG <
+       0.000001 {
+
+        SET crossTrackAxis TO
+            targetPlaneNormal.
+    }.
+
+    SET crossTrackAxis TO
+        crossTrackAxis:NORMALIZED.
+
+    SET crossVelocity TO
+        VDOT(
+            orbitVelVec,
+            crossTrackAxis
+        ).
+
+    SET crossTargetVelocity TO
+        -
+        crossPositionM /
+        crossTrackPositionTime.
+
+    IF crossTargetVelocity >
+       crossTrackVelocityLimit {
+
+        SET crossTargetVelocity TO
+            crossTrackVelocityLimit.
+    }.
+
+    IF crossTargetVelocity <
+       -crossTrackVelocityLimit {
+
+        SET crossTargetVelocity TO
+            -crossTrackVelocityLimit.
+    }.
+
+    SET crossAccelRaw TO
+        (
+            crossTargetVelocity -
+            crossVelocity
+        )
+        /
+        crossTrackVelocityTime.
+
+    SET terminalCrossAccelFiltered TO
+        terminalCrossAccelFiltered
+        +
+        crossTrackFilterGain
+        *
+        (
+            crossAccelRaw -
+            terminalCrossAccelFiltered
+        ).
+
+    SET maxCrossAccelByYaw TO
+        baseCommandAccel *
+        TAN(
+            terminalCrossTrackMaxYaw
+        ).
+
+    SET crossAccelCmd TO
+        terminalCrossAccelFiltered.
+
+    IF crossAccelCmd >
+       maxCrossAccelByYaw {
+
+        SET crossAccelCmd TO
+            maxCrossAccelByYaw.
+    }.
+
+    IF crossAccelCmd <
+       -maxCrossAccelByYaw {
+
+        SET crossAccelCmd TO
+            -maxCrossAccelByYaw.
     }.
 
     SET guidanceVec TO
         orbitGuidanceVec +
         (
-            planeCorrectionUnit *
-            planeTrimAccel
+            crossTrackAxis *
+            crossAccelCmd
         ).
 
     SET commandAccel TO
@@ -2716,7 +2830,7 @@ UNTIL terminalComplete
 
         SET actualTrimYaw TO
             ARCTAN2(
-                planeTrimAccel,
+                crossAccelCmd,
                 baseCommandAccel
             ).
     }.
@@ -2959,7 +3073,7 @@ UNTIL terminalComplete
     // --------------------------------------------------
 
     PRINT
-        "===== SV-5.8 TERMINAL ====="
+        "===== SV-5.9 TERMINAL ====="
         AT(0,2).
 
     IF captureActive {
@@ -3072,23 +3186,21 @@ UNTIL terminalComplete
         AT(0,15).
 
     PRINT
-        "PLN DV: " +
+        "XPOS: " +
         ROUND(
-            localPlaneDvEstimate,
-            2
+            crossPositionM,
+            1
         ) +
-        " m/s      "
+        " m        "
         AT(0,16).
 
     PRINT
-        "EFF: " +
+        "XVEL: " +
         ROUND(
-            planeEffectivenessRatio,
-            3
+            crossVelocity,
+            2
         ) +
-        " ACTIVE:" +
-        terminalPlaneTrimActive +
-        "     "
+        " m/s      "
         AT(0,17).
 
     PRINT
@@ -3147,10 +3259,10 @@ UNTIL terminalComplete
             ROUND(SHIP:ALTITUDE,3) + "," +
             ROUND(currentInclination,7) + "," +
             ROUND(planeAngleError,7) + "," +
-            ROUND(planeEffectivenessRatio,5) + "," +
-            terminalPlaneTrimActive + "," +
-            terminalPlaneTrimWindowClosed + "," +
-            ROUND(planeTrimAccel,6) + "," +
+            ROUND(crossPositionM,3) + "," +
+            ROUND(crossVelocity,5) + "," +
+            ROUND(crossTargetVelocity,5) + "," +
+            ROUND(crossAccelCmd,6) + "," +
             ROUND(actualTrimYaw,5) + "," +
             ROUND(radialVel,5) + "," +
             ROUND(tangentialVel,5) + "," +
@@ -3186,7 +3298,7 @@ UNTIL terminalComplete
        lastFlightLog >= 0.5 {
 
         logState(
-            "SV58_GUIDANCE"
+            "SV59_GUIDANCE"
         ).
 
         SET lastFlightLog TO
@@ -3237,7 +3349,7 @@ IF finalTangentialVec:MAG > 1 {
 
 WAIT 0.25.
 
-logState("SV58_CUTOFF").
+logState("SV59_CUTOFF").
 
 UNLOCK STEERING.
 
@@ -3294,7 +3406,7 @@ SET finalPlaneAngle TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.8 GUIDANCE COMPLETE =====".
+PRINT "===== SV-5.9 GUIDANCE COMPLETE =====".
 PRINT "".
 PRINT "Target:         " + ROUND(orbitTarget/1000,2) + " km @ " + ROUND(targetInclination,3) + " deg".
 PRINT "".
@@ -3325,12 +3437,12 @@ IF terminalComplete {
 
 PRINT "".
 PRINT "FLIGHT LOG:".
-PRINT "0:/sv58flight.csv".
+PRINT "0:/sv59flight.csv".
 PRINT "".
 PRINT "GUIDANCE LOG:".
-PRINT "0:/sv58guidance.csv".
+PRINT "0:/sv59guidance.csv".
 PRINT "".
 PRINT "ASCENT LOG:".
-PRINT "0:/sv58ascent.csv".
+PRINT "0:/sv59ascent.csv".
 
 logState("FINAL").
