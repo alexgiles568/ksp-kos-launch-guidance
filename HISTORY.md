@@ -220,3 +220,21 @@
 - Filtered cross-track acceleration is capped to 2° yaw during both upper-stage ascent and terminal insertion.
 - The correction remains subordinate to the existing radial/tangential burn and vanishes as main insertion thrust goes to zero.
 - Keeps the SV-5.8 1365 m/s launch reference and delayed upper-stage ignition.
+
+## SV-5.9 80 km / 30° test
+
+- **ORBIT PASS / PLANE CONTROLLER MISS** — final orbit about 80.00011 × 79.99017 km, final inclination 30.39442°.
+- Booster burnout was excellent at 29.97924°, confirming the 1365 m/s direct-launch calibration.
+- The cross-track PD controller then pushed inclination upward: ascent cutoff reached 30.18452° and terminal guidance continued to roughly 30.39442°.
+- Cross-track position improved, but cross-track velocity overshot its target and the controller traded LAN/path geometry against inclination.
+- This confirmed that the mission GUI's requested quantity should be controlled directly as inclination rather than over-constraining a full frozen plane/LAN.
+
+## SV-6.0 — inclination-only trim
+
+- Keeps the 1365 m/s launch calibration and delayed upper-stage ignition.
+- Removes cross-track position/velocity guidance from powered plane correction.
+- Uses a +/-1 m/s numerical normal-burn probe to measure local d(inclination)/d(normal dV).
+- Applies a filtered first-order inclination correction directly toward the GUI target inclination.
+- Smooth effectiveness weighting fades correction where normal thrust mostly changes LAN instead of inclination.
+- Upper-stage and terminal trim remain yaw-limited and subordinate to the existing insertion burn.
+- SV-3.3 radial/tangential guidance is unchanged.
