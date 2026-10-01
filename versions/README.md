@@ -33,3 +33,5 @@ See the repository-level `HISTORY.md` for tested results and development rationa
 - `sv59_damped_cross_track_pd.ks` — current SV-5.9 branch: damped cross-track position/velocity plane guidance with 2° yaw cap.
 
 - `sv60_inclination_only_trim.ks` — current SV-6.0 branch: inclination-only numerical normal-trim controller.
+
+- `sv61_local_inclination_course.ks` — current SV-6.1 branch: local inclination-derived ascent course with direct inclination trim.
