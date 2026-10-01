@@ -1,0 +1,3908 @@
+// ======================================================
+// SV-6.2 MISSION CONFIG
+// 0.625 m TWO-STAGE LIQUID LAUNCHER
+//
+// CONFIGURABLE:
+//   - Circular orbit altitude
+//   - Orbital inclination
+//   - Ascending / descending launch-plane branch
+//
+// Derived from successful SV-4.0.1 / SV-3.3 guidance.
+//
+// SV-6.2:
+// - Keeps SV-6.1's inclination-derived local inertial course.
+// - Fixes the polar booster miss by replacing the fixed
+//   1365 m/s rotation-compensation approximation with a
+//   speed-matched solution once horizontal speed is high
+//   enough.
+//
+//   Given desired inertial horizontal unit vector u,
+//   surface horizontal speed S, and local rotational
+//   velocity R, solve:
+//
+//       |V*u - R| = S
+//
+//   for the positive inertial speed V, then steer along
+//   V*u - R in the rotating surface frame.
+//
+// - Blends smoothly from the proven fixed-reference heading
+//   at low speed to the exact speed-matched heading.
+// - Pre-points the upper stage during coast and delays
+//   ignition until q is low and attitude is settled.
+// - Keeps SV-6.0/6.1's direct inclination trim and the
+//   proven SV-3.3 radial/tangential insertion controller.
+// - Fixes duplicated inclination columns in ascent/guidance
+//   CSV logging.
+//
+// ======================================================
+
+CLEARSCREEN.
+CLEARGUIS().
+
+SET orbitTarget TO 80000.
+SET targetInclination TO 0.
+SET planeBranch TO "ASCENDING".
+
+// ======================================================
+// MISSION CONFIG GUI
+// ======================================================
+
+SET configGui TO GUI(360).
+
+SET configGui:X TO 50.
+SET configGui:Y TO 80.
+SET configGui:DRAGGABLE TO TRUE.
+
+SET titleLabel TO configGui:ADDLABEL("SV-6.2 LAUNCH GUIDANCE").
+SET titleLabel:STYLE:ALIGN TO "CENTER".
+SET titleLabel:STYLE:HSTRETCH TO TRUE.
+
+configGui:ADDSPACING(6).
+
+SET subtitleLabel TO configGui:ADDLABEL("Mission Configuration").
+SET subtitleLabel:STYLE:ALIGN TO "CENTER".
+SET subtitleLabel:STYLE:HSTRETCH TO TRUE.
+
+configGui:ADDSPACING(8).
+
+SET altitudeRow TO configGui:ADDHLAYOUT().
+SET altitudeLabel TO altitudeRow:ADDLABEL("Orbit altitude (km):").
+SET altitudeLabel:STYLE:WIDTH TO 190.
+SET altitudeField TO altitudeRow:ADDTEXTFIELD("80").
+SET altitudeField:STYLE:WIDTH TO 120.
+
+SET inclinationRow TO configGui:ADDHLAYOUT().
+SET inclinationLabel TO inclinationRow:ADDLABEL("Inclination (deg):").
+SET inclinationLabel:STYLE:WIDTH TO 190.
+SET inclinationField TO inclinationRow:ADDTEXTFIELD("0").
+SET inclinationField:STYLE:WIDTH TO 120.
+
+SET branchRow TO configGui:ADDHLAYOUT().
+SET branchLabel TO branchRow:ADDLABEL("Plane branch:").
+SET branchLabel:STYLE:WIDTH TO 190.
+
+SET branchMenu TO branchRow:ADDPOPUPMENU().
+SET branchMenu:OPTIONS TO LIST("ASCENDING","DESCENDING").
+SET branchMenu:INDEX TO 0.
+SET branchMenu:STYLE:WIDTH TO 120.
+
+configGui:ADDSPACING(8).
+
+SET statusLabel TO configGui:ADDLABEL("Enter mission parameters.").
+SET statusLabel:STYLE:ALIGN TO "CENTER".
+SET statusLabel:STYLE:HSTRETCH TO TRUE.
+
+configGui:ADDSPACING(6).
+
+SET launchButton TO configGui:ADDBUTTON("ARM MISSION").
+SET launchButton:STYLE:HSTRETCH TO TRUE.
+
+configGui:SHOW().
+
+// ======================================================
+// WAIT FOR VALID CONFIGURATION
+// ======================================================
+
+SET configAccepted TO FALSE.
+
+UNTIL configAccepted {
+
+    IF launchButton:TAKEPRESS {
+
+        SET altitudeKm TO altitudeField:TEXT:TONUMBER(-999999).
+        SET inclinationInput TO inclinationField:TEXT:TONUMBER(-999999).
+
+        SET branchInput TO "ASCENDING".
+
+        IF branchMenu:INDEX = 1 {
+            SET branchInput TO "DESCENDING".
+        }.
+
+        IF altitudeKm = -999999 {
+
+            SET statusLabel:TEXT TO "Altitude must be a number.".
+
+        } ELSE IF altitudeKm < 71 {
+
+            SET statusLabel:TEXT TO "Altitude must be >= 71 km.".
+
+        } ELSE IF altitudeKm > 5000 {
+
+            SET statusLabel:TEXT TO "Altitude limit: 5000 km.".
+
+        } ELSE IF inclinationInput = -999999 {
+
+            SET statusLabel:TEXT TO "Inclination must be a number.".
+
+        } ELSE IF inclinationInput < 0
+               OR inclinationInput > 180 {
+
+            SET statusLabel:TEXT TO "Inclination must be 0..180 deg.".
+
+        } ELSE {
+
+            SET orbitTarget TO altitudeKm * 1000.
+            SET targetInclination TO inclinationInput.
+            SET planeBranch TO branchInput.
+            SET configAccepted TO TRUE.
+            SET statusLabel:TEXT TO "MISSION ACCEPTED".
+        }.
+    }.
+
+    WAIT 0.1.
+}.
+
+WAIT 0.4.
+
+configGui:HIDE().
+configGui:DISPOSE().
+
+// ======================================================
+// GUIDANCE CONSTANTS
+// ======================================================
+
+SET etaTarget TO 50.
+
+SET sepMinAlt TO 33000.
+SET sepMaxQ TO 0.025.
+
+SET fairingMinAlt TO 60000.
+SET fairingMaxQ TO 0.0005.
+
+SET coarseTangentialGain TO 0.35.
+SET fineTangentialGain TO 0.12.
+SET fineLatchTanError TO 5.
+
+SET fineRadialTimeConstant TO 25.
+SET fineRadialVelGain TO 0.16.
+SET radialVelMax TO 90.
+
+SET radialTgoFloor TO 4.
+SET radialAccelLimit TO 6.
+
+// ------------------------------------------------------
+// LAUNCH / PLANE TRIM
+// ------------------------------------------------------
+//
+// Empirical launch-plane reference speed.
+// Previous tests bracketed the correct 30-deg solution:
+// full circular-speed compensation undershot inclination,
+// while low/current-speed compensation overcorrected.
+// Flight calibration:
+//   SV-5.5: 1800 m/s -> 28.9995 deg booster burnout
+//   SV-5.6: 1500 m/s -> 29.6077 deg booster burnout
+//   SV-5.7: 1300 m/s -> 30.1904 deg booster burnout
+// Linear interpolation puts the 30-deg reference near
+// 1365 m/s.  Upper-stage yaw trim removes the residual.
+
+SET launchPlaneReferenceSpeed TO 1365.
+
+// Dynamic booster rotation compensation.
+// Below blend start retain the proven fixed-reference
+// heading. Above blend end use the exact speed-matched
+// surface heading.
+SET rotationBlendStartSpeed TO 300.
+SET rotationBlendFullSpeed TO 700.
+
+// Upper-stage ignition sequencing.
+SET upperIgnitionMaxQ TO 0.010.
+SET upperIgnitionMaxSteerError TO 3.
+SET upperIgnitionAlignHold TO 0.50.
+SET upperClearanceMinTime TO 1.80.
+
+// Small yaw correction during the already-required
+// second-stage burn.  It is never allowed to become a
+// dedicated plane-change maneuver.
+
+// Inclination-only trim controller.
+//
+// A +/-1 m/s hypothetical burn along the current orbital
+// normal measures the instantaneous sensitivity:
+//
+//   d(inclination) / d(normal dV)
+//
+// The requested inclination-rate correction is divided by
+// that measured sensitivity.  Effectiveness weighting then
+// smoothly fades the command near geometries where normal
+// thrust mostly changes LAN instead of inclination.
+
+SET inclinationProbeDv TO 1.
+
+// Legacy full-plane diagnostics still use this separate
+// +/-1 m/s probe. It is diagnostic only in SV-6.2.
+SET planeProbeDv TO 1.
+
+SET inclinationDerivativeFloor TO 0.0005.
+SET inclinationFilterGain TO 0.12.
+
+SET upperInclinationTimeConstant TO 12.
+SET upperInclinationMaxQ TO 0.010.
+SET upperInclinationMaxSteerError TO 6.
+SET upperInclinationMaxYaw TO 2.
+
+SET terminalInclinationTimeConstant TO 10.
+SET terminalInclinationMaxYaw TO 2.
+
+SET planeResidualReportTolerance TO 0.05.
+SET terminalIgnitionSteerError TO 8.
+
+SET constraintAllocationFraction TO 0.98.
+SET startLeadBias TO 0.8.
+
+SET accelStopThreshold TO 0.0008.
+SET accelStartThreshold TO 0.0010.
+
+SET apsisTolerance TO 10.
+SET inclinationTolerance TO 0.001.
+SET planeCaptureTolerance TO 0.001.
+SET captureHoldTime TO 0.75.
+
+SET finePitchTS TO 4.
+SET fineYawTS TO 6.
+
+SET originalPitchTS TO STEERINGMANAGER:PITCHTS.
+SET originalYawTS TO STEERINGMANAGER:YAWTS.
+SET steeringFineTuned TO FALSE.
+
+SET terminalMaxTime TO 360.
+SET engineFailureHoldTime TO 2.
+
+// ======================================================
+// STATE FLAGS
+// ======================================================
+
+SET boosterBurnout TO FALSE.
+SET boosterDropped TO FALSE.
+SET fairingDeployed TO FALSE.
+SET ascentDone TO FALSE.
+
+SET terminalComplete TO FALSE.
+SET terminalFailed TO FALSE.
+
+SET fineLatched TO FALSE.
+
+SET captureActive TO FALSE.
+SET captureStartMET TO 0.
+
+SET upperInclinationAccelFiltered TO 0.
+SET terminalInclinationAccelFiltered TO 0.
+
+SET lowDvStart TO -1.
+
+SET throttleCmd TO 0.
+SET pitchCmd TO 90.
+
+SET thrustActive TO TRUE.
+
+// ======================================================
+// LOG FILES
+// ======================================================
+
+SET flightLog TO "0:/sv62flight.csv".
+SET guidanceLog TO "0:/sv62guidance.csv".
+SET ascentLog TO "0:/sv62ascent.csv".
+
+IF EXISTS(flightLog) {
+    DELETEPATH(flightLog).
+}.
+
+IF EXISTS(guidanceLog) {
+    DELETEPATH(guidanceLog).
+}.
+
+IF EXISTS(ascentLog) {
+    DELETEPATH(ascentLog).
+}.
+
+LOG
+"MET,event,alt_m,lat_deg,inc_deg,surfspd_mps,orbspd_mps,vertspeed_mps,ap_m,pe_m,eta_ap_s,mass_t,throttle,dv_mps,q_atm"
+TO flightLog.
+
+LOG
+"MET,mode,actuator,alt_m,inc_deg,inc_error_deg,inc_derivative_deg_per_mps,inc_effectiveness,inc_accel_cmd_mps2,inc_trim_yaw_deg,radial_vel_mps,tangential_vel_mps,circular_vel_mps,tangential_error_mps,tgo_s,natural_radial_accel,radial_req_accel,tangential_req_accel,radial_alloc_accel,tangential_alloc_accel,max_accel,base_command_accel,total_command_accel,throttle,ap_m,pe_m,ap_error_m,pe_error_m,fine_latched,capture,steer_angle_err_deg"
+TO guidanceLog.
+
+LOG
+"MET,alt_m,inc_deg,inc_error_deg,inc_derivative_deg_per_mps,inc_effectiveness,inc_accel_cmd_mps2,inc_trim_yaw_deg,pitch_cmd_deg,throttle,q_atm,ap_m,eta_ap_s,surfspd_mps,radial_vel_mps,tangential_vel_mps,steer_angle_err_deg"
+TO ascentLog.
+
+// ======================================================
+// LOGGER
+// ======================================================
+
+FUNCTION logState {
+
+    PARAMETER eventName.
+
+    LOG
+        ROUND(MISSIONTIME,3) + "," +
+        eventName + "," +
+        ROUND(SHIP:ALTITUDE,3) + "," +
+        ROUND(SHIP:LATITUDE,7) + "," +
+        ROUND(SHIP:OBT:INCLINATION,7) + "," +
+        ROUND(SHIP:VELOCITY:SURFACE:MAG,3) + "," +
+        ROUND(SHIP:VELOCITY:ORBIT:MAG,3) + "," +
+        ROUND(SHIP:VERTICALSPEED,3) + "," +
+        ROUND(SHIP:OBT:APOAPSIS,3) + "," +
+        ROUND(SHIP:OBT:PERIAPSIS,3) + "," +
+        ROUND(ETA:APOAPSIS,3) + "," +
+        ROUND(SHIP:MASS,5) + "," +
+        ROUND(throttleCmd,7) + "," +
+        ROUND(SHIP:DELTAV:CURRENT,3) + "," +
+        ROUND(SHIP:Q,7)
+        TO flightLog.
+}.
+
+// ======================================================
+// FAIRING
+// ======================================================
+
+FUNCTION checkFairing {
+
+    IF NOT fairingDeployed
+       AND SHIP:ALTITUDE >= fairingMinAlt
+       AND SHIP:Q <= fairingMaxQ {
+
+        TOGGLE AG1.
+        SET fairingDeployed TO TRUE.
+        logState("FAIRING_JETTISON").
+    }.
+}.
+
+// ======================================================
+// BUILD TARGET ORBITAL PLANE
+// ======================================================
+
+SET launchLat TO SHIP:LATITUDE.
+SET launchUp TO SHIP:UP:VECTOR.
+SET launchNorth TO SHIP:NORTH:VECTOR.
+SET launchEast TO HEADING(90,0):VECTOR.
+
+SET poleHat TO
+    (launchUp * SIN(launchLat))
+    +
+    (launchNorth * COS(launchLat)).
+
+SET poleHat TO poleHat:NORMALIZED.
+
+SET eqRadVec TO
+    launchUp -
+    (poleHat * VDOT(launchUp,poleHat)).
+
+SET eqRadHat TO eqRadVec:NORMALIZED.
+SET eqEastHat TO launchEast:NORMALIZED.
+
+SET planeInclination TO targetInclination.
+SET desiredEastSign TO 1.
+
+IF targetInclination > 90 {
+
+    SET planeInclination TO
+        180 -
+        targetInclination.
+
+    SET desiredEastSign TO -1.
+}.
+
+SET sinPlaneI TO SIN(planeInclination).
+SET cosPlaneI TO COS(planeInclination).
+
+IF ABS(sinPlaneI) < 0.000001 {
+
+    SET targetPlaneNormal TO poleHat.
+
+    SET rawAlong TO
+        VCRS(
+            targetPlaneNormal,
+            launchUp
+        ).
+
+    SET alongCrossSign TO 1.
+
+    IF rawAlong:MAG > 0.000001 {
+
+        SET rawAlong TO rawAlong:NORMALIZED.
+
+        IF VDOT(rawAlong,launchEast) *
+           desiredEastSign < 0 {
+
+            SET alongCrossSign TO -1.
+        }.
+    }.
+
+} ELSE {
+
+    SET qDot TO
+        -(cosPlaneI * SIN(launchLat))
+        /
+        (sinPlaneI * COS(launchLat)).
+
+    IF qDot > 1 {
+        SET qDot TO 1.
+    }.
+
+    IF qDot < -1 {
+        SET qDot TO -1.
+    }.
+
+    SET qPerpSquared TO
+        1 -
+        qDot^2.
+
+    IF qPerpSquared < 0 {
+        SET qPerpSquared TO 0.
+    }.
+
+    SET qPerp TO SQRT(qPerpSquared).
+
+    SET q1 TO
+        (eqRadHat * qDot)
+        +
+        (eqEastHat * qPerp).
+
+    SET h1 TO
+        (poleHat * cosPlaneI)
+        +
+        (q1 * sinPlaneI).
+
+    SET h1 TO h1:NORMALIZED.
+
+    SET q2 TO
+        (eqRadHat * qDot)
+        -
+        (eqEastHat * qPerp).
+
+    SET h2 TO
+        (poleHat * cosPlaneI)
+        +
+        (q2 * sinPlaneI).
+
+    SET h2 TO h2:NORMALIZED.
+
+    SET rawAlong1 TO
+        VCRS(
+            h1,
+            launchUp
+        ).
+
+    SET rawAlong2 TO
+        VCRS(
+            h2,
+            launchUp
+        ).
+
+    SET sign1 TO 1.
+    SET sign2 TO 1.
+
+    IF rawAlong1:MAG > 0.000001 {
+
+        SET rawAlong1 TO rawAlong1:NORMALIZED.
+
+        IF VDOT(rawAlong1,launchEast) *
+           desiredEastSign < 0 {
+
+            SET sign1 TO -1.
+            SET rawAlong1 TO -rawAlong1.
+        }.
+    }.
+
+    IF rawAlong2:MAG > 0.000001 {
+
+        SET rawAlong2 TO rawAlong2:NORMALIZED.
+
+        IF VDOT(rawAlong2,launchEast) *
+           desiredEastSign < 0 {
+
+            SET sign2 TO -1.
+            SET rawAlong2 TO -rawAlong2.
+        }.
+    }.
+
+    SET north1 TO VDOT(rawAlong1,launchNorth).
+    SET north2 TO VDOT(rawAlong2,launchNorth).
+
+    IF planeBranch = "ASCENDING" {
+
+        IF north1 >= north2 {
+
+            SET targetPlaneNormal TO h1.
+            SET alongCrossSign TO sign1.
+
+        } ELSE {
+
+            SET targetPlaneNormal TO h2.
+            SET alongCrossSign TO sign2.
+        }.
+
+    } ELSE {
+
+        IF north1 <= north2 {
+
+            SET targetPlaneNormal TO h1.
+            SET alongCrossSign TO sign1.
+
+        } ELSE {
+
+            SET targetPlaneNormal TO h2.
+            SET alongCrossSign TO sign2.
+        }.
+    }.
+}.
+
+// ======================================================
+// FREEZE TARGET PLANE IN AN INERTIAL BASIS
+//
+// Raw vectors cannot safely be stored as celestial
+// directions because SHIP-RAW changes.  Store the target
+// normal as three scalar coefficients relative to:
+//
+//   1) body rotation pole
+//   2) Solar Prime projected into the equatorial plane
+//   3) the orthogonal equatorial side axis
+//
+// SOLARPRIMEVECTOR is fixed to the firmament and
+// BODY:ANGULARVEL supplies the body's inertial pole.
+// Rebuilding from these each tick keeps the plane fixed
+// in inertial space while Kerbin rotates underneath it.
+// ======================================================
+
+SET initialTargetPlaneNormal TO
+    targetPlaneNormal:NORMALIZED.
+
+SET inertialPole0 TO
+    SHIP:BODY:ANGULARVEL.
+
+IF inertialPole0:MAG < 0.0000001 {
+    SET inertialPole0 TO poleHat.
+} ELSE {
+    SET inertialPole0 TO inertialPole0:NORMALIZED.
+}.
+
+SET inertialPrimeRaw0 TO
+    SOLARPRIMEVECTOR -
+    (
+        inertialPole0 *
+        VDOT(
+            SOLARPRIMEVECTOR,
+            inertialPole0
+        )
+    ).
+
+IF inertialPrimeRaw0:MAG < 0.000001 {
+
+    SET inertialPrimeRaw0 TO
+        launchEast -
+        (
+            inertialPole0 *
+            VDOT(
+                launchEast,
+                inertialPole0
+            )
+        ).
+}.
+
+SET inertialPrime0 TO
+    inertialPrimeRaw0:NORMALIZED.
+
+SET inertialSide0 TO
+    VCRS(
+        inertialPole0,
+        inertialPrime0
+    ):NORMALIZED.
+
+SET targetPrimeCoeff TO
+    VDOT(
+        initialTargetPlaneNormal,
+        inertialPrime0
+    ).
+
+SET targetSideCoeff TO
+    VDOT(
+        initialTargetPlaneNormal,
+        inertialSide0
+    ).
+
+SET targetPoleCoeff TO
+    VDOT(
+        initialTargetPlaneNormal,
+        inertialPole0
+    ).
+
+FUNCTION targetPlaneNow {
+
+    LOCAL p IS
+        SHIP:BODY:ANGULARVEL.
+
+    IF p:MAG < 0.0000001 {
+        SET p TO inertialPole0.
+    } ELSE {
+        SET p TO p:NORMALIZED.
+    }.
+
+    LOCAL primeRaw IS
+        SOLARPRIMEVECTOR -
+        (
+            p *
+            VDOT(
+                SOLARPRIMEVECTOR,
+                p
+            )
+        ).
+
+    IF primeRaw:MAG < 0.000001 {
+        SET primeRaw TO inertialPrime0.
+    }.
+
+    LOCAL primeAxis IS
+        primeRaw:NORMALIZED.
+
+    LOCAL sideAxis IS
+        VCRS(
+            p,
+            primeAxis
+        ):NORMALIZED.
+
+    LOCAL resultVec IS
+        (
+            primeAxis *
+            targetPrimeCoeff
+        )
+        +
+        (
+            sideAxis *
+            targetSideCoeff
+        )
+        +
+        (
+            p *
+            targetPoleCoeff
+        ).
+
+    RETURN resultVec:NORMALIZED.
+}.
+
+// ======================================================
+// LOCAL INCLINATION COURSE
+//
+// For target inclination i at current latitude phi:
+//
+//     east = cos(i) / cos(phi)
+//
+// The remaining horizontal component is north/south,
+// selected by the mission branch.  This defines inclination
+// without selecting a fixed LAN / RAAN.
+// ======================================================
+
+FUNCTION inclinationAlongNow {
+
+    LOCAL latNow IS
+        SHIP:LATITUDE.
+
+    LOCAL cosLat IS
+        COS(latNow).
+
+    LOCAL eastFraction IS 0.
+
+    IF ABS(cosLat) >
+       0.000001 {
+
+        SET eastFraction TO
+            COS(targetInclination) /
+            cosLat.
+
+    } ELSE {
+
+        IF COS(targetInclination) > 0 {
+            SET eastFraction TO 1.
+        } ELSE IF COS(targetInclination) < 0 {
+            SET eastFraction TO -1.
+        } ELSE {
+            SET eastFraction TO 0.
+        }.
+    }.
+
+    IF eastFraction > 1 {
+        SET eastFraction TO 1.
+    }.
+
+    IF eastFraction < -1 {
+        SET eastFraction TO -1.
+    }.
+
+    LOCAL northSquared IS
+        1 -
+        eastFraction^2.
+
+    IF northSquared < 0 {
+        SET northSquared TO 0.
+    }.
+
+    LOCAL northFraction IS
+        SQRT(northSquared).
+
+    IF planeBranch = "DESCENDING" {
+        SET northFraction TO
+            -northFraction.
+    }.
+
+    LOCAL northVec IS
+        SHIP:NORTH:VECTOR.
+
+    LOCAL eastVec IS
+        HEADING(90,0):VECTOR.
+
+    LOCAL resultVec IS
+        (
+            northVec *
+            northFraction
+        )
+        +
+        (
+            eastVec *
+            eastFraction
+        ).
+
+    IF resultVec:MAG <
+       0.000001 {
+
+        SET resultVec TO
+            eastVec.
+    }.
+
+    RETURN resultVec:NORMALIZED.
+}.
+
+SET targetPlaneNormal TO
+    targetPlaneNow().
+
+// ======================================================
+// INITIAL DESIRED ALONG-TRACK DIRECTION
+// ======================================================
+
+SET launchAlongHat TO
+    inclinationAlongNow().
+
+SET launchAlongVec TO
+    launchAlongHat.
+
+// ======================================================
+// ROTATION-COMPENSATED LAUNCH AZIMUTH
+//
+// launchAlongHat is the desired INERTIAL orbit direction.
+// HEADING() is surface-relative, so subtract the local
+// rotational frame velocity before deriving the heading.
+// ======================================================
+
+SET launchRotationVel TO
+    SHIP:VELOCITY:ORBIT -
+    SHIP:VELOCITY:SURFACE.
+
+SET desiredLaunchInertialVel TO
+    launchAlongHat *
+    launchPlaneReferenceSpeed.
+
+SET desiredLaunchSurfaceVel TO
+    desiredLaunchInertialVel -
+    launchRotationVel.
+
+SET desiredLaunchSurfaceVel TO
+    desiredLaunchSurfaceVel -
+    (
+        launchUp *
+        VDOT(
+            desiredLaunchSurfaceVel,
+            launchUp
+        )
+    ).
+
+IF desiredLaunchSurfaceVel:MAG <
+   0.000001 {
+
+    SET desiredLaunchSurfaceVel TO
+        launchAlongHat.
+}.
+
+SET launchSurfaceHat TO
+    desiredLaunchSurfaceVel:NORMALIZED.
+
+SET launchNorthComponent TO
+    VDOT(
+        launchSurfaceHat,
+        launchNorth
+    ).
+
+SET launchEastComponent TO
+    VDOT(
+        launchSurfaceHat,
+        launchEast
+    ).
+
+SET launchAzimuth TO
+    ARCTAN2(
+        launchEastComponent,
+        launchNorthComponent
+    ).
+
+IF launchAzimuth < 0 {
+    SET launchAzimuth TO launchAzimuth + 360.
+}.
+
+SET guidanceAzimuth TO
+    launchAzimuth.
+
+// ======================================================
+// MISSION SUMMARY
+// ======================================================
+
+CLEARSCREEN.
+
+PRINT "===== SV-6.2 MISSION =====".
+PRINT "".
+PRINT "TARGET ALT: " + ROUND(orbitTarget / 1000,2) + " km".
+PRINT "TARGET INC: " + ROUND(targetInclination,3) + " deg".
+PRINT "PLANE BRANCH: " + planeBranch.
+PRINT "LAUNCH AZ: " + ROUND(launchAzimuth,3) + " deg".
+PRINT "".
+PRINT "LAUNCHING IN 5 SECONDS".
+
+WAIT 2.
+
+// ======================================================
+// PRELAUNCH
+// ======================================================
+
+SET throttleCmd TO 1.
+
+LOCK THROTTLE TO throttleCmd.
+LOCK STEERING TO HEADING(launchAzimuth,90).
+
+PRINT "T-3".
+WAIT 1.
+PRINT "T-2".
+WAIT 1.
+PRINT "T-1".
+WAIT 1.
+
+logState("PRELAUNCH").
+
+PRINT "IGNITION".
+
+STAGE.
+
+WAIT 0.2.
+
+logState("LIFTOFF").
+
+SET lastLog TO MISSIONTIME.
+
+// ======================================================
+// BOOSTER ASCENT
+// ======================================================
+
+UNTIL boosterBurnout {
+
+    SET surfSpd TO SHIP:VELOCITY:SURFACE:MAG.
+
+    // Recompute the surface-relative heading for the local
+    // inertial course corresponding to target inclination.
+
+    SET targetPlaneNormal TO
+        targetPlaneNow().
+
+    SET planeUp TO SHIP:UP:VECTOR.
+    SET planeNorth TO SHIP:NORTH:VECTOR.
+    SET planeEast TO HEADING(90,0):VECTOR.
+
+    // Local inertial course for the requested
+    // inclination.  No fixed LAN / RAAN is imposed.
+
+    SET planeAlongHat TO
+        inclinationAlongNow().
+
+    SET planeAlongVec TO
+        planeAlongHat.
+
+    // --------------------------------------------------
+    // LEGACY FULL-PLANE DIAGNOSTICS
+    // --------------------------------------------------
+    //
+    // Diagnostics still measure geometric plane position
+    // and cross-plane velocity, but they do NOT command a
+    // dogleg.  Residual error is trimmed gently during the
+    // powered upper-stage / terminal burn.
+
+    SET planeOrbitVel TO
+        SHIP:VELOCITY:ORBIT.
+
+    SET planeRadialVel TO
+        VDOT(
+            planeOrbitVel,
+            planeUp
+        ).
+
+    SET planeHorizontalVel TO
+        planeOrbitVel -
+        (
+            planeUp *
+            planeRadialVel
+        ).
+
+    SET planeHorizontalSpeed TO
+        planeHorizontalVel:MAG.
+
+    SET planePositionDot TO
+        VDOT(
+            planeUp,
+            targetPlaneNormal
+        ).
+
+    IF planePositionDot > 1 {
+        SET planePositionDot TO 1.
+    }.
+
+    IF planePositionDot < -1 {
+        SET planePositionDot TO -1.
+    }.
+
+    SET ascentPlaneAngle TO
+        ARCSIN(
+            planePositionDot
+        ).
+
+    SET ascentPlaneErrorM TO
+        (
+            SHIP:BODY:RADIUS +
+            SHIP:ALTITUDE
+        )
+        *
+        ascentPlaneAngle
+        *
+        CONSTANT:DEGTORAD.
+
+    SET ascentCrossAxis TO
+        targetPlaneNormal -
+        (
+            planeUp *
+            planePositionDot
+        ).
+
+    IF ascentCrossAxis:MAG <
+       0.000001 {
+
+        SET ascentCrossAxis TO
+            targetPlaneNormal.
+    }.
+
+    SET ascentCrossAxis TO
+        ascentCrossAxis:NORMALIZED.
+
+    SET ascentCrossVel TO
+        VDOT(
+            planeOrbitVel,
+            ascentCrossAxis
+        ).
+
+    SET planeRotationVel TO
+        SHIP:VELOCITY:ORBIT -
+        SHIP:VELOCITY:SURFACE.
+
+    SET planeRotationHorizontal TO
+        planeRotationVel -
+        (
+            planeUp *
+            VDOT(
+                planeRotationVel,
+                planeUp
+            )
+        ).
+
+    SET surfaceVelNow TO
+        SHIP:VELOCITY:SURFACE.
+
+    SET surfaceRadialVel TO
+        VDOT(
+            surfaceVelNow,
+            planeUp
+        ).
+
+    SET surfaceHorizontalVel TO
+        surfaceVelNow -
+        (
+            planeUp *
+            surfaceRadialVel
+        ).
+
+    SET surfaceHorizontalSpeed TO
+        surfaceHorizontalVel:MAG.
+
+    // Low-speed reference solution.
+    SET fixedSurfaceVec TO
+        (
+            planeAlongHat *
+            launchPlaneReferenceSpeed
+        )
+        -
+        planeRotationHorizontal.
+
+    IF fixedSurfaceVec:MAG <
+       0.000001 {
+
+        SET fixedSurfaceVec TO
+            planeAlongHat.
+    }.
+
+    SET fixedSurfaceHat TO
+        fixedSurfaceVec:NORMALIZED.
+
+    // Exact speed-matched solution:
+    // |V*u - R| = current surface horizontal speed.
+
+    SET exactSurfaceHat TO
+        fixedSurfaceHat.
+
+    SET uDotR TO
+        VDOT(
+            planeAlongHat,
+            planeRotationHorizontal
+        ).
+
+    SET rotationPerpSquared TO
+        planeRotationHorizontal:MAG^2
+        -
+        uDotR^2.
+
+    IF rotationPerpSquared < 0 {
+        SET rotationPerpSquared TO 0.
+    }.
+
+    SET exactDiscriminant TO
+        surfaceHorizontalSpeed^2
+        -
+        rotationPerpSquared.
+
+    IF exactDiscriminant >= 0
+       AND
+       surfaceHorizontalSpeed >
+       1 {
+
+        SET matchedInertialSpeed TO
+            uDotR +
+            SQRT(
+                exactDiscriminant
+            ).
+
+        IF matchedInertialSpeed < 1 {
+            SET matchedInertialSpeed TO 1.
+        }.
+
+        SET exactSurfaceVec TO
+            (
+                planeAlongHat *
+                matchedInertialSpeed
+            )
+            -
+            planeRotationHorizontal.
+
+        IF exactSurfaceVec:MAG >
+           0.000001 {
+
+            SET exactSurfaceHat TO
+                exactSurfaceVec:NORMALIZED.
+        }.
+    }.
+
+    SET rotationBlend TO
+        (
+            surfaceHorizontalSpeed -
+            rotationBlendStartSpeed
+        )
+        /
+        (
+            rotationBlendFullSpeed -
+            rotationBlendStartSpeed
+        ).
+
+    IF rotationBlend < 0 {
+        SET rotationBlend TO 0.
+    }.
+
+    IF rotationBlend > 1 {
+        SET rotationBlend TO 1.
+    }.
+
+    SET desiredPlaneSurfaceHat TO
+        (
+            fixedSurfaceHat *
+            (
+                1 -
+                rotationBlend
+            )
+        )
+        +
+        (
+            exactSurfaceHat *
+            rotationBlend
+        ).
+
+    IF desiredPlaneSurfaceHat:MAG <
+       0.000001 {
+
+        SET desiredPlaneSurfaceHat TO
+            fixedSurfaceHat.
+    } ELSE {
+
+        SET desiredPlaneSurfaceHat TO
+            desiredPlaneSurfaceHat:NORMALIZED.
+    }.
+
+    SET planeNorthComponent TO
+        VDOT(
+            desiredPlaneSurfaceHat,
+            planeNorth
+        ).
+
+    SET planeEastComponent TO
+        VDOT(
+            desiredPlaneSurfaceHat,
+            planeEast
+        ).
+
+    SET guidanceAzimuth TO
+        ARCTAN2(
+            planeEastComponent,
+            planeNorthComponent
+        ).
+
+    IF guidanceAzimuth < 0 {
+
+        SET guidanceAzimuth TO
+            guidanceAzimuth +
+            360.
+    }.
+
+    IF surfSpd < 40 {
+
+        SET pitchCmd TO 90.
+
+    } ELSE IF surfSpd < 100 {
+
+        SET pitchCmd TO
+            90 -
+            ((surfSpd - 40) / 60) * 8.
+
+    } ELSE IF surfSpd < 220 {
+
+        SET pitchCmd TO
+            82 -
+            ((surfSpd - 100) / 120) * 17.
+
+    } ELSE IF surfSpd < 400 {
+
+        SET pitchCmd TO
+            65 -
+            ((surfSpd - 220) / 180) * 18.
+
+    } ELSE IF surfSpd < 650 {
+
+        SET pitchCmd TO
+            47 -
+            ((surfSpd - 400) / 250) * 12.
+
+    } ELSE {
+
+        // Above 650 m/s retain the closed-loop plane
+        // azimuth and let pitch relax with flight path.
+
+        SET fpaBoost TO 0.
+
+        IF surfSpd > 1 {
+
+            SET fpaBoostRatio TO
+                SHIP:VERTICALSPEED /
+                surfSpd.
+
+            IF fpaBoostRatio > 1 {
+                SET fpaBoostRatio TO 1.
+            }.
+
+            IF fpaBoostRatio < -1 {
+                SET fpaBoostRatio TO -1.
+            }.
+
+            SET fpaBoost TO
+                ARCSIN(
+                    fpaBoostRatio
+                ).
+        }.
+
+        SET pitchCmd TO
+            fpaBoost.
+    }.
+
+    LOCK STEERING TO
+        HEADING(
+            guidanceAzimuth,
+            pitchCmd
+        ).
+
+    SET throttleCmd TO 1.
+
+    IF SHIP:Q > 0.35 {
+        SET throttleCmd TO 0.85.
+    }.
+
+    IF SHIP:Q > 0.45 {
+        SET throttleCmd TO 0.65.
+    }.
+
+    LOCK THROTTLE TO throttleCmd.
+
+    PRINT "BOOSTER ASCENT        " AT(0,7).
+    PRINT "ALT: " + ROUND(SHIP:ALTITUDE/1000,2) + " km      " AT(0,10).
+    PRINT "AZ: " + ROUND(guidanceAzimuth,2) + " deg      " AT(0,11).
+    PRINT "PLN: " + ROUND(ascentPlaneErrorM,1) + " m       " AT(0,12).
+    PRINT "XVEL: " + ROUND(ascentCrossVel,1) + " m/s      " AT(0,13).
+    PRINT "AP: " + ROUND(SHIP:OBT:APOAPSIS/1000,2) + " km      " AT(0,14).
+    PRINT "Q: " + ROUND(SHIP:Q,3) + " atm      " AT(0,15).
+
+    IF MISSIONTIME - lastLog >= 0.5 {
+
+        logState("BOOSTER_ASCENT").
+        SET lastLog TO MISSIONTIME.
+    }.
+
+    IF SHIP:AVAILABLETHRUST < 0.1
+       AND MISSIONTIME > 5 {
+
+        SET boosterBurnout TO TRUE.
+        SET throttleCmd TO 0.
+        LOCK THROTTLE TO throttleCmd.
+        LOCK STEERING TO SRFPROGRADE.
+        logState("BOOSTER_BURNOUT").
+    }.
+
+    WAIT 0.02.
+}.
+
+// ======================================================
+// BOOSTER COAST / SEPARATION
+// ======================================================
+
+CLEARSCREEN.
+
+PRINT "===== BOOSTER BURNOUT =====".
+PRINT "".
+PRINT "COASTING TO SAFE SEPARATION".
+
+SET lastLog TO MISSIONTIME.
+
+UNTIL boosterDropped {
+
+    SET throttleCmd TO 0.
+
+    LOCK THROTTLE TO throttleCmd.
+    LOCK STEERING TO SRFPROGRADE.
+
+    IF MISSIONTIME - lastLog >= 0.25 {
+
+        logState("BOOSTER_COAST").
+        SET lastLog TO MISSIONTIME.
+    }.
+
+    PRINT "ALT: " + ROUND(SHIP:ALTITUDE/1000,2) + " km       " AT(0,8).
+    PRINT "Q: " + ROUND(SHIP:Q,4) + " atm      " AT(0,9).
+    PRINT "AP: " + ROUND(SHIP:OBT:APOAPSIS/1000,2) + " km       " AT(0,10).
+
+    IF SHIP:ALTITUDE >= sepMinAlt
+       AND SHIP:Q <= sepMaxQ {
+
+        logState("PRE_SEPARATION").
+        STAGE.
+        SET boosterDropped TO TRUE.
+        WAIT 0.2.
+        logState("BOOSTER_SEPARATED").
+    }.
+
+    WAIT 0.02.
+}.
+
+// ======================================================
+// BOOSTER CLEARANCE / UPPER PRE-POINT
+// ======================================================
+
+SET throttleCmd TO 0.
+LOCK THROTTLE TO throttleCmd.
+
+SET clearanceStartMET TO
+    MISSIONTIME.
+
+SET upperAlignStartMET TO -1.
+SET upperReady TO FALSE.
+
+UNTIL upperReady {
+
+    SET coastUp TO
+        SHIP:UP:VECTOR.
+
+    SET coastAlong TO
+        inclinationAlongNow().
+
+    SET coastSurfSpd TO
+        SHIP:VELOCITY:SURFACE:MAG.
+
+    SET coastFpa TO 0.
+
+    IF coastSurfSpd > 1 {
+
+        SET coastFpaRatio TO
+            SHIP:VERTICALSPEED /
+            coastSurfSpd.
+
+        IF coastFpaRatio > 1 {
+            SET coastFpaRatio TO 1.
+        }.
+
+        IF coastFpaRatio < -1 {
+            SET coastFpaRatio TO -1.
+        }.
+
+        SET coastFpa TO
+            ARCSIN(
+                coastFpaRatio
+            ).
+    }.
+
+    SET upperPrepointVec TO
+        (
+            coastAlong *
+            COS(
+                coastFpa
+            )
+        )
+        +
+        (
+            coastUp *
+            SIN(
+                coastFpa
+            )
+        ).
+
+    IF upperPrepointVec:MAG >
+       0.000001 {
+
+        LOCK STEERING TO
+            upperPrepointVec:NORMALIZED.
+    }.
+
+    SET clearanceTimeOk TO
+        MISSIONTIME -
+        clearanceStartMET >=
+        upperClearanceMinTime.
+
+    SET qOk TO
+        SHIP:Q <=
+        upperIgnitionMaxQ.
+
+    SET steerOk TO
+        ABS(
+            STEERINGMANAGER:ANGLEERROR
+        ) <=
+        upperIgnitionMaxSteerError.
+
+    IF clearanceTimeOk
+       AND qOk
+       AND steerOk {
+
+        IF upperAlignStartMET < 0 {
+            SET upperAlignStartMET TO
+                MISSIONTIME.
+        }.
+
+        IF MISSIONTIME -
+           upperAlignStartMET >=
+           upperIgnitionAlignHold {
+
+            SET upperReady TO TRUE.
+        }.
+
+    } ELSE {
+
+        SET upperAlignStartMET TO -1.
+    }.
+
+    PRINT "UPPER PRE-POINT       " AT(0,6).
+    PRINT "Q: " + ROUND(SHIP:Q,4) + " atm      " AT(0,8).
+    PRINT "STEER ERR: " + ROUND(STEERINGMANAGER:ANGLEERROR,2) + " deg      " AT(0,9).
+    PRINT "INC: " + ROUND(SHIP:OBT:INCLINATION,3) + " deg      " AT(0,10).
+
+    WAIT 0.02.
+}.
+
+IF SHIP:AVAILABLETHRUST < 0.1 {
+
+    STAGE.
+    WAIT 0.25.
+}.
+
+logState("UPPER_ENGINE_READY").
+
+// ======================================================
+// UPPER-STAGE ASCENT
+//
+// Local inclination-course pitch guidance + small direct
+// inclination trim. Neither base steering nor trim fixes
+// LAN / RAAN.
+// ======================================================
+
+CLEARSCREEN.
+
+SET lastLog TO MISSIONTIME.
+SET lastAscentLog TO MISSIONTIME.
+
+UNTIL ascentDone {
+
+    SET surfSpd TO
+        SHIP:VELOCITY:SURFACE:MAG.
+
+    SET fpa TO 0.
+
+    SET targetPlaneNormal TO
+        targetPlaneNow().
+
+    SET planeUp TO
+        SHIP:UP:VECTOR.
+
+    // Local inertial course for the requested
+    // inclination.  This is recomputed as latitude changes.
+
+    SET planeAlongHat TO
+        inclinationAlongNow().
+
+    SET planeAlongVec TO
+        planeAlongHat.
+
+    SET orbitVelVec TO
+        SHIP:VELOCITY:ORBIT.
+
+    SET radialVel TO
+        VDOT(
+            orbitVelVec,
+            planeUp
+        ).
+
+    SET tangentialVelVec TO
+        orbitVelVec -
+        (
+            planeUp *
+            radialVel
+        ).
+
+    SET tangentialVel TO
+        tangentialVelVec:MAG.
+
+    // --------------------------------------------------
+    // CURRENT ORBITAL-PLANE ERROR
+    // --------------------------------------------------
+
+    SET currentNormalVec TO
+        VCRS(
+            orbitVelVec,
+            planeUp
+        ).
+
+    IF currentNormalVec:MAG >
+       0.000001 {
+
+        SET currentOrbitNormal TO
+            currentNormalVec:NORMALIZED.
+
+    } ELSE {
+
+        SET currentOrbitNormal TO
+            targetPlaneNormal.
+    }.
+
+    IF VDOT(
+        currentOrbitNormal,
+        targetPlaneNormal
+       ) < 0 {
+
+        SET currentOrbitNormal TO
+            -currentOrbitNormal.
+    }.
+
+    SET planeAngleError TO
+        VANG(
+            currentOrbitNormal,
+            targetPlaneNormal
+        ).
+
+    SET planeDvEstimate TO
+        2 *
+        tangentialVel *
+        SIN(
+            planeAngleError /
+            2
+        ).
+
+    // Probe +/- current orbit normal to select the yaw
+    // direction that locally reduces target-plane error.
+
+    SET plusProbeVel TO
+        orbitVelVec +
+        (
+            currentOrbitNormal *
+            planeProbeDv
+        ).
+
+    SET plusProbeNormal TO
+        VCRS(
+            plusProbeVel,
+            planeUp
+        ).
+
+    IF plusProbeNormal:MAG >
+       0.000001 {
+
+        SET plusProbeNormal TO
+            plusProbeNormal:NORMALIZED.
+
+    } ELSE {
+
+        SET plusProbeNormal TO
+            currentOrbitNormal.
+    }.
+
+    IF VDOT(
+        plusProbeNormal,
+        targetPlaneNormal
+       ) < 0 {
+
+        SET plusProbeNormal TO
+            -plusProbeNormal.
+    }.
+
+    SET plusProbeAngle TO
+        VANG(
+            plusProbeNormal,
+            targetPlaneNormal
+        ).
+
+    SET minusProbeVel TO
+        orbitVelVec -
+        (
+            currentOrbitNormal *
+            planeProbeDv
+        ).
+
+    SET minusProbeNormal TO
+        VCRS(
+            minusProbeVel,
+            planeUp
+        ).
+
+    IF minusProbeNormal:MAG >
+       0.000001 {
+
+        SET minusProbeNormal TO
+            minusProbeNormal:NORMALIZED.
+
+    } ELSE {
+
+        SET minusProbeNormal TO
+            currentOrbitNormal.
+    }.
+
+    IF VDOT(
+        minusProbeNormal,
+        targetPlaneNormal
+       ) < 0 {
+
+        SET minusProbeNormal TO
+            -minusProbeNormal.
+    }.
+
+    SET minusProbeAngle TO
+        VANG(
+            minusProbeNormal,
+            targetPlaneNormal
+        ).
+
+    SET planeCorrectionUnit TO
+        currentOrbitNormal.
+
+    SET bestProbeAngle TO
+        plusProbeAngle.
+
+    IF minusProbeAngle <
+       plusProbeAngle {
+
+        SET planeCorrectionUnit TO
+            -currentOrbitNormal.
+
+        SET bestProbeAngle TO
+            minusProbeAngle.
+    }.
+
+    SET planeImprovementPerDv TO
+        (
+            planeAngleError -
+            bestProbeAngle
+        )
+        /
+        planeProbeDv.
+
+    IF planeImprovementPerDv < 0 {
+        SET planeImprovementPerDv TO 0.
+    }.
+
+    SET idealPlaneEffectiveness TO 0.
+
+    IF tangentialVel > 1 {
+
+        SET idealPlaneEffectiveness TO
+            57.2957795 /
+            tangentialVel.
+    }.
+
+    SET planeEffectivenessRatio TO 0.
+
+    IF idealPlaneEffectiveness >
+       0.0000001 {
+
+        SET planeEffectivenessRatio TO
+            planeImprovementPerDv /
+            idealPlaneEffectiveness.
+    }.
+
+    IF planeEffectivenessRatio > 1 {
+        SET planeEffectivenessRatio TO 1.
+    }.
+
+    IF planeEffectivenessRatio < 0 {
+        SET planeEffectivenessRatio TO 0.
+    }.
+
+    // Local dV required at the current geometry.
+    // This is the key SV-6.2 gain fix.  SV-5.5 multiplied
+    // ideal plane dV by effectiveness, which REDUCED the
+    // command exactly when geometry made each m/s less
+    // effective.  The numerical derivative already tells
+    // us how much orbital-normal angle each m/s buys here.
+
+    SET localPlaneDvEstimate TO
+        planeDvEstimate.
+
+    IF planeImprovementPerDv >
+       0.0000001 {
+
+        SET localPlaneDvEstimate TO
+            planeAngleError /
+            planeImprovementPerDv.
+    }.
+
+    // --------------------------------------------------
+    // PITCH / APOAPSIS GUIDANCE
+    // --------------------------------------------------
+
+    IF surfSpd > 1 {
+
+        SET fpaRatio TO
+            SHIP:VERTICALSPEED /
+            surfSpd.
+
+        IF fpaRatio > 1 {
+            SET fpaRatio TO 1.
+        }.
+
+        IF fpaRatio < -1 {
+            SET fpaRatio TO -1.
+        }.
+
+        SET fpa TO
+            ARCSIN(
+                fpaRatio
+            ).
+    }.
+
+    IF SHIP:Q > 0.015 {
+
+        SET pitchCmd TO fpa.
+
+    } ELSE {
+
+        SET etaError TO
+            etaTarget -
+            ETA:APOAPSIS.
+
+        SET pitchOffset TO
+            etaError *
+            0.20.
+
+        IF pitchOffset < -10 {
+            SET pitchOffset TO -10.
+        }.
+
+        IF pitchOffset > 10 {
+            SET pitchOffset TO 10.
+        }.
+
+        SET pitchCmd TO
+            fpa +
+            pitchOffset.
+
+        IF pitchCmd < 0 {
+            SET pitchCmd TO 0.
+        }.
+
+        IF pitchCmd > 45 {
+            SET pitchCmd TO 45.
+        }.
+
+        IF SHIP:OBT:APOAPSIS <
+           60000
+           AND
+           pitchCmd < 12 {
+
+            SET pitchCmd TO 12.
+        }.
+
+        IF SHIP:OBT:APOAPSIS >=
+           60000
+           AND
+           SHIP:OBT:APOAPSIS <
+           70000
+           AND
+           pitchCmd < 6 {
+
+            SET pitchCmd TO 6.
+        }.
+    }.
+
+    // --------------------------------------------------
+    // THROTTLE / APOAPSIS CUTOFF
+    // --------------------------------------------------
+
+    SET throttleCmd TO 1.
+
+    IF SHIP:Q > 0.05 {
+
+        SET throttleCmd TO 0.35.
+
+    } ELSE IF SHIP:Q > 0.03 {
+
+        SET throttleCmd TO 0.50.
+
+    } ELSE IF SHIP:Q > 0.015 {
+
+        SET throttleCmd TO 0.70.
+    }.
+
+    SET apReserve TO
+        SHIP:Q *
+        20000.
+
+    IF apReserve > 750 {
+        SET apReserve TO 750.
+    }.
+
+    IF apReserve < 0 {
+        SET apReserve TO 0.
+    }.
+
+    SET cutoffApTarget TO
+        orbitTarget +
+        apReserve.
+
+    SET apError TO
+        cutoffApTarget -
+        SHIP:OBT:APOAPSIS.
+
+    IF apError < 3000
+       AND
+       throttleCmd > 0.55 {
+
+        SET throttleCmd TO 0.55.
+    }.
+
+    IF apError < 1200
+       AND
+       throttleCmd > 0.30 {
+
+        SET throttleCmd TO 0.30.
+    }.
+
+    IF apError < 400
+       AND
+       throttleCmd > 0.15 {
+
+        SET throttleCmd TO 0.15.
+    }.
+
+    // --------------------------------------------------
+    // INERTIAL IN-PLANE STEERING + LIMITED YAW TRIM
+    // --------------------------------------------------
+
+    SET baseDir TO
+        (
+            planeAlongHat *
+            COS(
+                pitchCmd
+            )
+        )
+        +
+        (
+            planeUp *
+            SIN(
+                pitchCmd
+            )
+        ).
+
+    SET baseDir TO
+        baseDir:NORMALIZED.
+
+    SET maxAccel TO
+        SHIP:AVAILABLETHRUST /
+        SHIP:MASS.
+
+    SET poweredAccel TO
+        maxAccel *
+        throttleCmd.
+
+    // --------------------------------------------------
+    // INCLINATION-ONLY NORMAL TRIM
+    // --------------------------------------------------
+
+    SET currentInclination TO
+        SHIP:OBT:INCLINATION.
+
+    SET inclinationError TO
+        targetInclination -
+        currentInclination.
+
+    SET bodyPoleNow TO
+        SHIP:BODY:ANGULARVEL.
+
+    IF bodyPoleNow:MAG <
+       0.0000001 {
+
+        SET bodyPoleNow TO
+            inertialPole0.
+
+    } ELSE {
+
+        SET bodyPoleNow TO
+            bodyPoleNow:NORMALIZED.
+    }.
+
+    SET inclinationNormalUnit TO
+        VCRS(
+            planeUp,
+            orbitVelVec
+        ).
+
+    IF inclinationNormalUnit:MAG <
+       0.000001 {
+
+        SET inclinationNormalUnit TO
+            targetPlaneNormal.
+
+    } ELSE {
+
+        SET inclinationNormalUnit TO
+            inclinationNormalUnit:NORMALIZED.
+    }.
+
+    SET plusIncProbeVel TO
+        orbitVelVec +
+        (
+            inclinationNormalUnit *
+            inclinationProbeDv
+        ).
+
+    SET minusIncProbeVel TO
+        orbitVelVec -
+        (
+            inclinationNormalUnit *
+            inclinationProbeDv
+        ).
+
+    SET plusIncProbeNormal TO
+        VCRS(
+            planeUp,
+            plusIncProbeVel
+        ).
+
+    SET minusIncProbeNormal TO
+        VCRS(
+            planeUp,
+            minusIncProbeVel
+        ).
+
+    IF plusIncProbeNormal:MAG >
+       0.000001 {
+
+        SET plusIncProbeNormal TO
+            plusIncProbeNormal:NORMALIZED.
+    }.
+
+    IF minusIncProbeNormal:MAG >
+       0.000001 {
+
+        SET minusIncProbeNormal TO
+            minusIncProbeNormal:NORMALIZED.
+    }.
+
+    SET plusProbeInclination TO
+        VANG(
+            plusIncProbeNormal,
+            bodyPoleNow
+        ).
+
+    SET minusProbeInclination TO
+        VANG(
+            minusIncProbeNormal,
+            bodyPoleNow
+        ).
+
+    SET inclinationDerivative TO
+        (
+            plusProbeInclination -
+            minusProbeInclination
+        )
+        /
+        (
+            2 *
+            inclinationProbeDv
+        ).
+
+    SET idealInclinationDerivative TO 0.
+
+    IF tangentialVel > 1 {
+
+        SET idealInclinationDerivative TO
+            57.2957795 /
+            tangentialVel.
+    }.
+
+    SET inclinationEffectiveness TO 0.
+
+    IF idealInclinationDerivative >
+       0.0000001 {
+
+        SET inclinationEffectiveness TO
+            ABS(
+                inclinationDerivative
+            )
+            /
+            idealInclinationDerivative.
+    }.
+
+    IF inclinationEffectiveness > 1 {
+        SET inclinationEffectiveness TO 1.
+    }.
+
+    IF inclinationEffectiveness < 0 {
+        SET inclinationEffectiveness TO 0.
+    }.
+
+    SET inclinationAccelRaw TO 0.
+
+    IF ABS(
+        inclinationDerivative
+       ) >=
+       inclinationDerivativeFloor {
+
+        SET inclinationAccelRaw TO
+            (
+                inclinationError /
+                (
+                    inclinationDerivative *
+                    upperInclinationTimeConstant
+                )
+            )
+            *
+            (
+                inclinationEffectiveness^2
+            ).
+    }.
+
+    SET inclinationAccelAllowed TO TRUE.
+
+    IF SHIP:Q >
+       upperInclinationMaxQ {
+
+        SET inclinationAccelAllowed TO FALSE.
+    }.
+
+    IF ABS(
+        STEERINGMANAGER:ANGLEERROR
+       ) >
+       upperInclinationMaxSteerError {
+
+        SET inclinationAccelAllowed TO FALSE.
+    }.
+
+    IF NOT inclinationAccelAllowed {
+
+        SET inclinationAccelRaw TO 0.
+    }.
+
+    SET upperInclinationAccelFiltered TO
+        upperInclinationAccelFiltered
+        +
+        inclinationFilterGain
+        *
+        (
+            inclinationAccelRaw -
+            upperInclinationAccelFiltered
+        ).
+
+    SET maxInclinationAccelByYaw TO
+        poweredAccel *
+        TAN(
+            upperInclinationMaxYaw
+        ).
+
+    SET inclinationAccelCmd TO
+        upperInclinationAccelFiltered.
+
+    IF inclinationAccelCmd >
+       maxInclinationAccelByYaw {
+
+        SET inclinationAccelCmd TO
+            maxInclinationAccelByYaw.
+    }.
+
+    IF inclinationAccelCmd <
+       -maxInclinationAccelByYaw {
+
+        SET inclinationAccelCmd TO
+            -maxInclinationAccelByYaw.
+    }.
+
+    SET desiredSteeringVec TO
+        (
+            baseDir *
+            poweredAccel
+        )
+        +
+        (
+            inclinationNormalUnit *
+            inclinationAccelCmd
+        ).
+
+    IF desiredSteeringVec:MAG >
+       0.000001 {
+
+        LOCK STEERING TO
+            desiredSteeringVec.
+
+    } ELSE {
+
+        LOCK STEERING TO
+            baseDir.
+    }.
+
+    LOCK THROTTLE TO
+        throttleCmd.
+
+    checkFairing().
+
+    IF SHIP:OBT:APOAPSIS >=
+       cutoffApTarget {
+
+        SET ascentDone TO TRUE.
+
+        SET throttleCmd TO 0.
+
+        LOCK THROTTLE TO
+            throttleCmd.
+
+        logState(
+            "ASCENT_CUTOFF"
+        ).
+    }.
+
+    SET actualTrimYaw TO 0.
+
+    IF poweredAccel > 0 {
+
+        SET actualTrimYaw TO
+            ARCTAN2(
+                inclinationAccelCmd,
+                poweredAccel
+            ).
+    }.
+
+    IF MISSIONTIME -
+       lastAscentLog >= 0.1 {
+
+        LOG
+            ROUND(MISSIONTIME,3) + "," +
+            ROUND(SHIP:ALTITUDE,3) + "," +
+            ROUND(currentInclination,7) + "," +
+            ROUND(inclinationError,7) + "," +
+            ROUND(inclinationDerivative,7) + "," +
+            ROUND(inclinationEffectiveness,5) + "," +
+            ROUND(inclinationAccelCmd,6) + "," +
+            ROUND(actualTrimYaw,5) + "," +
+            ROUND(pitchCmd,5) + "," +
+            ROUND(throttleCmd,7) + "," +
+            ROUND(SHIP:Q,7) + "," +
+            ROUND(SHIP:OBT:APOAPSIS,3) + "," +
+            ROUND(ETA:APOAPSIS,3) + "," +
+            ROUND(surfSpd,3) + "," +
+            ROUND(radialVel,5) + "," +
+            ROUND(tangentialVel,5) + "," +
+            ROUND(STEERINGMANAGER:ANGLEERROR,5)
+            TO ascentLog.
+
+        SET lastAscentLog TO
+            MISSIONTIME.
+    }.
+
+    PRINT
+        "UPPER-STAGE ASCENT     "
+        AT(0,6).
+
+    PRINT
+        "ALT: " +
+        ROUND(
+            SHIP:ALTITUDE/1000,
+            2
+        ) +
+        " km       "
+        AT(0,9).
+
+    PRINT
+        "AP: " +
+        ROUND(
+            SHIP:OBT:APOAPSIS/1000,
+            2
+        ) +
+        " km       "
+        AT(0,10).
+
+    PRINT
+        "INC: " +
+        ROUND(
+            SHIP:OBT:INCLINATION,
+            4
+        ) +
+        " deg      "
+        AT(0,11).
+
+    PRINT
+        "PLANE: " +
+        ROUND(
+            planeAngleError,
+            4
+        ) +
+        " deg      "
+        AT(0,12).
+
+    PRINT
+        "YAW TRIM: " +
+        ROUND(
+            actualTrimYaw,
+            3
+        ) +
+        " deg      "
+        AT(0,13).
+
+    PRINT
+        "INC ERR: " +
+        ROUND(
+            inclinationError,
+            4
+        ) +
+        " deg      "
+        AT(0,14).
+
+    PRINT
+        "INC EFF: " +
+        ROUND(
+            inclinationEffectiveness,
+            3
+        ) +
+        "          "
+        AT(0,15).
+
+    PRINT
+        "ETA AP: " +
+        ROUND(
+            ETA:APOAPSIS,
+            1
+        ) +
+        " s        "
+        AT(0,16).
+
+    PRINT
+        "THR: " +
+        ROUND(
+            throttleCmd,
+            3
+        ) +
+        "          "
+        AT(0,17).
+
+    IF MISSIONTIME -
+       lastLog >= 0.25 {
+
+        logState(
+            "UPPER_ASCENT"
+        ).
+
+        SET lastLog TO
+            MISSIONTIME.
+    }.
+
+    WAIT 0.02.
+}.
+
+// ======================================================
+// COAST TO NEAR VACUUM
+// ======================================================
+
+SET throttleCmd TO 0.
+
+LOCK THROTTLE TO throttleCmd.
+LOCK STEERING TO PROGRADE.
+
+CLEARSCREEN.
+
+PRINT "===== ASCENT COMPLETE =====".
+PRINT "".
+PRINT "COASTING TO TERMINAL GUIDANCE".
+
+SET lastLog TO MISSIONTIME.
+
+UNTIL SHIP:ALTITUDE >= 60000
+      AND SHIP:Q <= 0.0005 {
+
+    checkFairing().
+
+    IF MISSIONTIME - lastLog >= 0.5 {
+
+        logState("ATMOSPHERIC_COAST").
+        SET lastLog TO MISSIONTIME.
+    }.
+
+    PRINT "ALT: " + ROUND(SHIP:ALTITUDE/1000,2) + " km       " AT(0,8).
+    PRINT "AP: " + ROUND(SHIP:OBT:APOAPSIS/1000,3) + " km       " AT(0,9).
+    PRINT "INC: " + ROUND(SHIP:OBT:INCLINATION,4) + " deg      " AT(0,10).
+    PRINT "ETA AP: " + ROUND(ETA:APOAPSIS,1) + " s        " AT(0,11).
+
+    WAIT 0.05.
+}.
+
+checkFairing().
+logState("NEAR_VACUUM").
+
+// ======================================================
+// ENGINE PERFORMANCE
+// ======================================================
+
+LIST ENGINES IN engineList.
+
+SET totalMassFlow TO 0.
+SET effectiveISP TO 0.
+
+FOR eng IN engineList {
+
+    IF eng:IGNITION
+       AND NOT eng:FLAMEOUT {
+
+        SET oneMassFlow TO
+            eng:AVAILABLETHRUST /
+            (eng:ISP * CONSTANT:g0).
+
+        SET totalMassFlow TO
+            totalMassFlow +
+            oneMassFlow.
+    }.
+}.
+
+IF totalMassFlow > 0 {
+
+    SET effectiveISP TO
+        SHIP:AVAILABLETHRUST /
+        (totalMassFlow * CONSTANT:g0).
+}.
+
+SET exhaustVelocity TO
+    effectiveISP *
+    CONSTANT:g0.
+
+// ======================================================
+// TERMINAL ACQUISITION
+//
+// Same timing architecture as the successful SV-3.3
+// branch.  Plane error does not alter burn timing.
+// ======================================================
+
+CLEARSCREEN.
+
+PRINT "===== SV-6.2 ACQUISITION =====".
+
+SET terminalStart TO FALSE.
+SET lastLog TO MISSIONTIME.
+
+UNTIL terminalStart {
+
+    SET upVec TO
+        SHIP:UP:VECTOR.
+
+    SET orbitVelVec TO
+        SHIP:VELOCITY:ORBIT.
+
+    SET radialVel TO
+        VDOT(
+            orbitVelVec,
+            upVec
+        ).
+
+    SET tangentialVelVec TO
+        orbitVelVec -
+        (
+            upVec *
+            radialVel
+        ).
+
+    SET tangentialVel TO
+        tangentialVelVec:MAG.
+
+    SET radiusNow TO
+        SHIP:BODY:RADIUS +
+        SHIP:ALTITUDE.
+
+    SET circularVelNow TO
+        SQRT(
+            SHIP:BODY:MU /
+            radiusNow
+        ).
+
+    SET tangentialError TO
+        circularVelNow -
+        tangentialVel.
+
+    SET dvEstimate TO
+        SQRT(
+            tangentialError^2 +
+            radialVel^2
+        ).
+
+    SET burnEstimate TO 0.
+    SET halfDvLead TO 0.
+
+    IF dvEstimate > 0
+       AND totalMassFlow > 0 {
+
+        SET finalMassEstimate TO
+            SHIP:MASS /
+            (
+                CONSTANT:e ^
+                (
+                    dvEstimate /
+                    exhaustVelocity
+                )
+            ).
+
+        SET burnEstimate TO
+            (
+                SHIP:MASS -
+                finalMassEstimate
+            )
+            /
+            totalMassFlow.
+
+        SET halfDvMass TO
+            SHIP:MASS /
+            (
+                CONSTANT:e ^
+                (
+                    0.5 *
+                    dvEstimate /
+                    exhaustVelocity
+                )
+            ).
+
+        SET halfDvLead TO
+            (
+                SHIP:MASS -
+                halfDvMass
+            )
+            /
+            totalMassFlow.
+    }.
+
+    SET startLead TO
+        halfDvLead +
+        startLeadBias.
+
+    PRINT
+        "ALT: " +
+        ROUND(
+            SHIP:ALTITUDE/1000,
+            3
+        ) +
+        " km      "
+        AT(0,6).
+
+    PRINT
+        "INC: " +
+        ROUND(
+            SHIP:OBT:INCLINATION,
+            5
+        ) +
+        " deg      "
+        AT(0,7).
+
+    PRINT
+        "RAD VEL: " +
+        ROUND(
+            radialVel,
+            2
+        ) +
+        " m/s     "
+        AT(0,8).
+
+    PRINT
+        "TAN ERR: " +
+        ROUND(
+            tangentialError,
+            1
+        ) +
+        " m/s     "
+        AT(0,9).
+
+    PRINT
+        "FULL BURN: " +
+        ROUND(
+            burnEstimate,
+            2
+        ) +
+        " s       "
+        AT(0,11).
+
+    PRINT
+        "START LEAD: " +
+        ROUND(
+            startLead,
+            2
+        ) +
+        " s       "
+        AT(0,12).
+
+    PRINT
+        "ETA AP: " +
+        ROUND(
+            ETA:APOAPSIS,
+            2
+        ) +
+        " s       "
+        AT(0,13).
+
+    IF ETA:APOAPSIS <=
+       startLead {
+
+        SET terminalStart TO TRUE.
+    }.
+
+    IF MISSIONTIME -
+       lastLog >= 0.5 {
+
+        logState(
+            "TERMINAL_COAST"
+        ).
+
+        SET lastLog TO
+            MISSIONTIME.
+    }.
+
+    WAIT 0.02.
+}.
+
+// ======================================================
+// SV-6.2 TERMINAL
+//
+// Proven radial/tangential SV-3.3 controller with a small
+// normal component layered on as a yaw bias.  The normal
+// component is capped as a fraction of the burn the orbit
+// controller already wants.  When the orbit burn stops,
+// plane correction stops too.
+// ======================================================
+
+CLEARSCREEN.
+
+PRINT "===== SV-6.2 TERMINAL =====".
+
+SET terminalStartMET TO
+    MISSIONTIME.
+
+SET terminalInclinationAccelFiltered TO 0.
+
+SET guidanceVec TO
+    SHIP:PROGRADE:VECTOR.
+
+SET steeringTargetVec TO
+    guidanceVec.
+
+SET throttleCmd TO 0.
+
+LOCK STEERING TO
+    steeringTargetVec.
+
+LOCK THROTTLE TO
+    throttleCmd.
+
+SET lastFlightLog TO
+    MISSIONTIME.
+
+SET lastGuidanceLog TO
+    MISSIONTIME.
+
+UNTIL terminalComplete
+      OR terminalFailed {
+
+    SET targetPlaneNormal TO
+        targetPlaneNow().
+
+    SET upVec TO
+        SHIP:UP:VECTOR.
+
+    SET orbitVelVec TO
+        SHIP:VELOCITY:ORBIT.
+
+    SET radialVel TO
+        VDOT(
+            orbitVelVec,
+            upVec
+        ).
+
+    SET tangentialVelVec TO
+        orbitVelVec -
+        (
+            upVec *
+            radialVel
+        ).
+
+    SET tangentialVel TO
+        tangentialVelVec:MAG.
+
+    IF tangentialVel > 1 {
+
+        SET tangentialUnit TO
+            tangentialVelVec:NORMALIZED.
+
+    } ELSE {
+
+        SET tangentialUnit TO
+            SHIP:PROGRADE:VECTOR.
+    }.
+
+    SET currentAp TO
+        SHIP:OBT:APOAPSIS.
+
+    SET currentPe TO
+        SHIP:OBT:PERIAPSIS.
+
+    SET currentInclination TO
+        SHIP:OBT:INCLINATION.
+
+    SET apOrbitError TO
+        orbitTarget -
+        currentAp.
+
+    SET peOrbitError TO
+        orbitTarget -
+        currentPe.
+
+    SET radiusNow TO
+        SHIP:BODY:RADIUS +
+        SHIP:ALTITUDE.
+
+    SET altitudeError TO
+        orbitTarget -
+        SHIP:ALTITUDE.
+
+    SET circularVelNow TO
+        SQRT(
+            SHIP:BODY:MU /
+            radiusNow
+        ).
+
+    SET tangentialError TO
+        circularVelNow -
+        tangentialVel.
+
+    // --------------------------------------------------
+    // ORBITAL-PLANE ERROR / TRIM DIRECTION
+    // --------------------------------------------------
+
+    SET currentNormalVec TO
+        VCRS(
+            orbitVelVec,
+            upVec
+        ).
+
+    IF currentNormalVec:MAG >
+       0.000001 {
+
+        SET currentOrbitNormal TO
+            currentNormalVec:NORMALIZED.
+
+    } ELSE {
+
+        SET currentOrbitNormal TO
+            targetPlaneNormal.
+    }.
+
+    IF VDOT(
+        currentOrbitNormal,
+        targetPlaneNormal
+       ) < 0 {
+
+        SET currentOrbitNormal TO
+            -currentOrbitNormal.
+    }.
+
+    SET planeAngleError TO
+        VANG(
+            currentOrbitNormal,
+            targetPlaneNormal
+        ).
+
+    SET planeDvEstimate TO
+        2 *
+        tangentialVel *
+        SIN(
+            planeAngleError /
+            2
+        ).
+
+    SET plusProbeVel TO
+        orbitVelVec +
+        (
+            currentOrbitNormal *
+            planeProbeDv
+        ).
+
+    SET plusProbeNormal TO
+        VCRS(
+            plusProbeVel,
+            upVec
+        ).
+
+    IF plusProbeNormal:MAG >
+       0.000001 {
+
+        SET plusProbeNormal TO
+            plusProbeNormal:NORMALIZED.
+
+    } ELSE {
+
+        SET plusProbeNormal TO
+            currentOrbitNormal.
+    }.
+
+    IF VDOT(
+        plusProbeNormal,
+        targetPlaneNormal
+       ) < 0 {
+
+        SET plusProbeNormal TO
+            -plusProbeNormal.
+    }.
+
+    SET plusProbeAngle TO
+        VANG(
+            plusProbeNormal,
+            targetPlaneNormal
+        ).
+
+    SET minusProbeVel TO
+        orbitVelVec -
+        (
+            currentOrbitNormal *
+            planeProbeDv
+        ).
+
+    SET minusProbeNormal TO
+        VCRS(
+            minusProbeVel,
+            upVec
+        ).
+
+    IF minusProbeNormal:MAG >
+       0.000001 {
+
+        SET minusProbeNormal TO
+            minusProbeNormal:NORMALIZED.
+
+    } ELSE {
+
+        SET minusProbeNormal TO
+            currentOrbitNormal.
+    }.
+
+    IF VDOT(
+        minusProbeNormal,
+        targetPlaneNormal
+       ) < 0 {
+
+        SET minusProbeNormal TO
+            -minusProbeNormal.
+    }.
+
+    SET minusProbeAngle TO
+        VANG(
+            minusProbeNormal,
+            targetPlaneNormal
+        ).
+
+    SET planeCorrectionUnit TO
+        currentOrbitNormal.
+
+    SET bestProbeAngle TO
+        plusProbeAngle.
+
+    IF minusProbeAngle <
+       plusProbeAngle {
+
+        SET planeCorrectionUnit TO
+            -currentOrbitNormal.
+
+        SET bestProbeAngle TO
+            minusProbeAngle.
+    }.
+
+    SET planeImprovementPerDv TO
+        (
+            planeAngleError -
+            bestProbeAngle
+        )
+        /
+        planeProbeDv.
+
+    IF planeImprovementPerDv < 0 {
+        SET planeImprovementPerDv TO 0.
+    }.
+
+    SET idealPlaneEffectiveness TO 0.
+
+    IF tangentialVel > 1 {
+
+        SET idealPlaneEffectiveness TO
+            57.2957795 /
+            tangentialVel.
+    }.
+
+    SET planeEffectivenessRatio TO 0.
+
+    IF idealPlaneEffectiveness >
+       0.0000001 {
+
+        SET planeEffectivenessRatio TO
+            planeImprovementPerDv /
+            idealPlaneEffectiveness.
+    }.
+
+    IF planeEffectivenessRatio > 1 {
+        SET planeEffectivenessRatio TO 1.
+    }.
+
+    IF planeEffectivenessRatio < 0 {
+        SET planeEffectivenessRatio TO 0.
+    }.
+
+    SET localPlaneDvEstimate TO
+        planeDvEstimate.
+
+    IF planeImprovementPerDv >
+       0.0000001 {
+
+        SET localPlaneDvEstimate TO
+            planeAngleError /
+            planeImprovementPerDv.
+    }.
+
+    // --------------------------------------------------
+    // PROVEN SV-3.3 RADIAL / TANGENTIAL CONTROLLER
+    // --------------------------------------------------
+
+    IF NOT fineLatched
+       AND
+       ABS(
+           tangentialError
+       ) <=
+       fineLatchTanError {
+
+        SET fineLatched TO TRUE.
+
+        SET STEERINGMANAGER:PITCHTS TO
+            finePitchTS.
+
+        SET STEERINGMANAGER:YAWTS TO
+            fineYawTS.
+
+        STEERINGMANAGER:RESETPIDS().
+
+        SET steeringFineTuned TO TRUE.
+
+        logState(
+            "FINE_MODE_LATCH"
+        ).
+    }.
+
+    SET positiveTanError TO
+        tangentialError.
+
+    IF positiveTanError < 0 {
+        SET positiveTanError TO 0.
+    }.
+
+    SET tGo TO 0.
+
+    IF positiveTanError > 0
+       AND totalMassFlow > 0 {
+
+        SET tgoFinalMass TO
+            SHIP:MASS /
+            (
+                CONSTANT:e ^
+                (
+                    positiveTanError /
+                    exhaustVelocity
+                )
+            ).
+
+        SET tGo TO
+            (
+                SHIP:MASS -
+                tgoFinalMass
+            )
+            /
+            totalMassFlow.
+    }.
+
+    SET gravityAccel TO
+        SHIP:BODY:MU /
+        (
+            radiusNow^2
+        ).
+
+    SET centrifugalAccel TO
+        (
+            tangentialVel^2
+        )
+        /
+        radiusNow.
+
+    SET naturalRadialAccel TO
+        centrifugalAccel -
+        gravityAccel.
+
+    IF NOT fineLatched {
+
+        SET radialGuidanceTime TO
+            tGo.
+
+        IF radialGuidanceTime <
+           radialTgoFloor {
+
+            SET radialGuidanceTime TO
+                radialTgoFloor.
+        }.
+
+        SET desiredRadialAccel TO
+            (
+                6 *
+                altitudeError /
+                (
+                    radialGuidanceTime^2
+                )
+            )
+            -
+            (
+                4 *
+                radialVel /
+                radialGuidanceTime
+            ).
+
+        IF desiredRadialAccel >
+           radialAccelLimit {
+
+            SET desiredRadialAccel TO
+                radialAccelLimit.
+        }.
+
+        IF desiredRadialAccel <
+           -radialAccelLimit {
+
+            SET desiredRadialAccel TO
+                -radialAccelLimit.
+        }.
+
+    } ELSE {
+
+        SET radialTarget TO
+            altitudeError /
+            fineRadialTimeConstant.
+
+        IF radialTarget >
+           radialVelMax {
+
+            SET radialTarget TO
+                radialVelMax.
+        }.
+
+        IF radialTarget <
+           -radialVelMax {
+
+            SET radialTarget TO
+                -radialVelMax.
+        }.
+
+        SET desiredRadialAccel TO
+            fineRadialVelGain *
+            (
+                radialTarget -
+                radialVel
+            ).
+    }.
+
+    SET radialReqAccel TO
+        desiredRadialAccel -
+        naturalRadialAccel.
+
+    IF fineLatched {
+
+        SET tangentialGain TO
+            fineTangentialGain.
+
+    } ELSE {
+
+        SET tangentialGain TO
+            coarseTangentialGain.
+    }.
+
+    SET desiredTangentialAccel TO
+        tangentialGain *
+        tangentialError.
+
+    SET tangentialCoupling TO
+        (
+            radialVel *
+            tangentialVel
+        )
+        /
+        radiusNow.
+
+    SET tanReqAccel TO
+        desiredTangentialAccel +
+        tangentialCoupling.
+
+    IF fineLatched
+       AND
+       tanReqAccel < 0 {
+
+        SET tanReqAccel TO 0.
+    }.
+
+    IF NOT fineLatched
+       AND
+       tanReqAccel < -2 {
+
+        SET tanReqAccel TO -2.
+    }.
+
+    SET maxAccel TO
+        SHIP:AVAILABLETHRUST /
+        SHIP:MASS.
+
+    SET radialAllocLimit TO
+        maxAccel *
+        constraintAllocationFraction.
+
+    SET radialAllocAccel TO
+        radialReqAccel.
+
+    IF radialAllocAccel >
+       radialAllocLimit {
+
+        SET radialAllocAccel TO
+            radialAllocLimit.
+    }.
+
+    IF radialAllocAccel <
+       -radialAllocLimit {
+
+        SET radialAllocAccel TO
+            -radialAllocLimit.
+    }.
+
+    SET tanCapacitySquared TO
+        maxAccel^2 -
+        radialAllocAccel^2.
+
+    IF tanCapacitySquared < 0 {
+        SET tanCapacitySquared TO 0.
+    }.
+
+    SET tanCapacity TO
+        SQRT(
+            tanCapacitySquared
+        ).
+
+    SET tanAllocAccel TO
+        tanReqAccel.
+
+    IF tanAllocAccel >
+       tanCapacity {
+
+        SET tanAllocAccel TO
+            tanCapacity.
+    }.
+
+    IF tanAllocAccel <
+       -tanCapacity {
+
+        SET tanAllocAccel TO
+            -tanCapacity.
+    }.
+
+    SET orbitGuidanceVec TO
+        (
+            tangentialUnit *
+            tanAllocAccel
+        )
+        +
+        (
+            upVec *
+            radialAllocAccel
+        ).
+
+    SET baseCommandAccel TO
+        orbitGuidanceVec:MAG.
+
+    // --------------------------------------------------
+    // INCLINATION-ONLY NORMAL TRIM
+    //
+    // The mission requests inclination, not LAN.  Control
+    // only that scalar orbital element and leave the node
+    // longitude produced by the direct launch unconstrained.
+    // --------------------------------------------------
+
+    SET inclinationError TO
+        targetInclination -
+        currentInclination.
+
+    SET bodyPoleNow TO
+        SHIP:BODY:ANGULARVEL.
+
+    IF bodyPoleNow:MAG <
+       0.0000001 {
+
+        SET bodyPoleNow TO
+            inertialPole0.
+
+    } ELSE {
+
+        SET bodyPoleNow TO
+            bodyPoleNow:NORMALIZED.
+    }.
+
+    SET inclinationNormalUnit TO
+        VCRS(
+            upVec,
+            orbitVelVec
+        ).
+
+    IF inclinationNormalUnit:MAG <
+       0.000001 {
+
+        SET inclinationNormalUnit TO
+            targetPlaneNormal.
+
+    } ELSE {
+
+        SET inclinationNormalUnit TO
+            inclinationNormalUnit:NORMALIZED.
+    }.
+
+    SET plusIncProbeVel TO
+        orbitVelVec +
+        (
+            inclinationNormalUnit *
+            inclinationProbeDv
+        ).
+
+    SET minusIncProbeVel TO
+        orbitVelVec -
+        (
+            inclinationNormalUnit *
+            inclinationProbeDv
+        ).
+
+    SET plusIncProbeNormal TO
+        VCRS(
+            upVec,
+            plusIncProbeVel
+        ).
+
+    SET minusIncProbeNormal TO
+        VCRS(
+            upVec,
+            minusIncProbeVel
+        ).
+
+    IF plusIncProbeNormal:MAG >
+       0.000001 {
+
+        SET plusIncProbeNormal TO
+            plusIncProbeNormal:NORMALIZED.
+    }.
+
+    IF minusIncProbeNormal:MAG >
+       0.000001 {
+
+        SET minusIncProbeNormal TO
+            minusIncProbeNormal:NORMALIZED.
+    }.
+
+    SET plusProbeInclination TO
+        VANG(
+            plusIncProbeNormal,
+            bodyPoleNow
+        ).
+
+    SET minusProbeInclination TO
+        VANG(
+            minusIncProbeNormal,
+            bodyPoleNow
+        ).
+
+    SET inclinationDerivative TO
+        (
+            plusProbeInclination -
+            minusProbeInclination
+        )
+        /
+        (
+            2 *
+            inclinationProbeDv
+        ).
+
+    SET idealInclinationDerivative TO 0.
+
+    IF tangentialVel > 1 {
+
+        SET idealInclinationDerivative TO
+            57.2957795 /
+            tangentialVel.
+    }.
+
+    SET inclinationEffectiveness TO 0.
+
+    IF idealInclinationDerivative >
+       0.0000001 {
+
+        SET inclinationEffectiveness TO
+            ABS(
+                inclinationDerivative
+            )
+            /
+            idealInclinationDerivative.
+    }.
+
+    IF inclinationEffectiveness > 1 {
+        SET inclinationEffectiveness TO 1.
+    }.
+
+    IF inclinationEffectiveness < 0 {
+        SET inclinationEffectiveness TO 0.
+    }.
+
+    SET inclinationAccelRaw TO 0.
+
+    IF ABS(
+        inclinationDerivative
+       ) >=
+       inclinationDerivativeFloor {
+
+        SET inclinationAccelRaw TO
+            (
+                inclinationError /
+                (
+                    inclinationDerivative *
+                    terminalInclinationTimeConstant
+                )
+            )
+            *
+            (
+                inclinationEffectiveness^2
+            ).
+    }.
+
+    SET terminalInclinationAccelFiltered TO
+        terminalInclinationAccelFiltered
+        +
+        inclinationFilterGain
+        *
+        (
+            inclinationAccelRaw -
+            terminalInclinationAccelFiltered
+        ).
+
+    SET maxInclinationAccelByYaw TO
+        baseCommandAccel *
+        TAN(
+            terminalInclinationMaxYaw
+        ).
+
+    SET inclinationAccelCmd TO
+        terminalInclinationAccelFiltered.
+
+    IF inclinationAccelCmd >
+       maxInclinationAccelByYaw {
+
+        SET inclinationAccelCmd TO
+            maxInclinationAccelByYaw.
+    }.
+
+    IF inclinationAccelCmd <
+       -maxInclinationAccelByYaw {
+
+        SET inclinationAccelCmd TO
+            -maxInclinationAccelByYaw.
+    }.
+
+    SET guidanceVec TO
+        orbitGuidanceVec +
+        (
+            inclinationNormalUnit *
+            inclinationAccelCmd
+        ).
+
+    SET commandAccel TO
+        guidanceVec:MAG.
+
+    SET actualTrimYaw TO 0.
+
+    IF baseCommandAccel >
+       0.000001 {
+
+        SET actualTrimYaw TO
+            ARCTAN2(
+                inclinationAccelCmd,
+                baseCommandAccel
+            ).
+    }.
+
+    // --------------------------------------------------
+    // ORBIT CAPTURE
+    // --------------------------------------------------
+
+    SET insideCapture TO FALSE.
+
+    IF ABS(apOrbitError) <=
+          apsisTolerance
+       AND
+       ABS(peOrbitError) <=
+          apsisTolerance {
+
+        SET insideCapture TO TRUE.
+    }.
+
+    IF insideCapture
+       AND NOT captureActive {
+
+        SET captureActive TO TRUE.
+
+        SET captureStartMET TO
+            MISSIONTIME.
+
+        SET thrustActive TO FALSE.
+
+        SET throttleCmd TO 0.
+
+        SET steeringTargetVec TO
+            tangentialUnit.
+
+        LOCK THROTTLE TO
+            throttleCmd.
+
+        logState(
+            "CAPTURE_ENTER"
+        ).
+    }.
+
+    IF captureActive {
+
+        SET throttleCmd TO 0.
+
+        SET steeringTargetVec TO
+            tangentialUnit.
+
+        LOCK THROTTLE TO
+            throttleCmd.
+
+        IF NOT insideCapture {
+
+            SET captureActive TO FALSE.
+
+            SET thrustActive TO FALSE.
+
+            logState(
+                "CAPTURE_LOST"
+            ).
+
+        } ELSE IF
+          MISSIONTIME -
+          captureStartMET >=
+          captureHoldTime {
+
+            SET terminalComplete TO TRUE.
+
+            logState(
+                "CAPTURE_CONFIRMED"
+            ).
+        }.
+
+    } ELSE {
+
+        IF thrustActive {
+
+            IF commandAccel <=
+               accelStopThreshold {
+
+                SET thrustActive TO FALSE.
+
+                SET throttleCmd TO 0.
+
+                LOCK THROTTLE TO
+                    throttleCmd.
+
+                logState(
+                    "FINE_COAST_ENTER"
+                ).
+
+            } ELSE {
+
+                SET steeringTargetVec TO
+                    guidanceVec.
+
+                IF maxAccel > 0 {
+
+                    SET throttleCmd TO
+                        commandAccel /
+                        maxAccel.
+
+                } ELSE {
+
+                    SET throttleCmd TO 0.
+                }.
+
+                // Do not light a tiny precision burn while
+                // the vehicle is still slewing to the new
+                // guidance vector.
+
+                IF STEERINGMANAGER:ANGLEERROR >
+                   terminalIgnitionSteerError {
+
+                    SET throttleCmd TO 0.
+                }.
+
+                IF throttleCmd > 1 {
+                    SET throttleCmd TO 1.
+                }.
+
+                IF throttleCmd < 0 {
+                    SET throttleCmd TO 0.
+                }.
+
+                LOCK THROTTLE TO
+                    throttleCmd.
+            }.
+
+        } ELSE {
+
+            SET throttleCmd TO 0.
+
+            LOCK THROTTLE TO
+                throttleCmd.
+
+            IF commandAccel >=
+               accelStartThreshold {
+
+                SET thrustActive TO TRUE.
+
+                SET steeringTargetVec TO
+                    guidanceVec.
+
+                IF maxAccel > 0 {
+
+                    SET throttleCmd TO
+                        commandAccel /
+                        maxAccel.
+
+                } ELSE {
+
+                    SET throttleCmd TO 0.
+                }.
+
+                // Do not light a tiny precision burn while
+                // the vehicle is still slewing to the new
+                // guidance vector.
+
+                IF STEERINGMANAGER:ANGLEERROR >
+                   terminalIgnitionSteerError {
+
+                    SET throttleCmd TO 0.
+                }.
+
+                IF throttleCmd > 1 {
+                    SET throttleCmd TO 1.
+                }.
+
+                IF throttleCmd < 0 {
+                    SET throttleCmd TO 0.
+                }.
+
+                LOCK THROTTLE TO
+                    throttleCmd.
+
+                logState(
+                    "FINE_COAST_EXIT"
+                ).
+            }.
+        }.
+    }.
+
+    // --------------------------------------------------
+    // FAILURE / TIMEOUT
+    // --------------------------------------------------
+
+    IF SHIP:DELTAV:CURRENT <
+       0.5
+       AND
+       SHIP:AVAILABLETHRUST <
+       0.1 {
+
+        IF lowDvStart < 0 {
+
+            SET lowDvStart TO
+                MISSIONTIME.
+        }.
+
+        IF MISSIONTIME -
+           lowDvStart >=
+           engineFailureHoldTime {
+
+            SET terminalFailed TO TRUE.
+
+            SET throttleCmd TO 0.
+
+            LOCK THROTTLE TO
+                throttleCmd.
+
+            logState(
+                "PROPULSION_FAILURE"
+            ).
+        }.
+
+    } ELSE {
+
+        SET lowDvStart TO -1.
+    }.
+
+    IF MISSIONTIME -
+       terminalStartMET >
+       terminalMaxTime {
+
+        SET terminalFailed TO TRUE.
+
+        SET throttleCmd TO 0.
+
+        LOCK THROTTLE TO
+            throttleCmd.
+
+        logState(
+            "GUIDANCE_TIMEOUT"
+        ).
+    }.
+
+    // --------------------------------------------------
+    // DISPLAY
+    // --------------------------------------------------
+
+    PRINT
+        "===== SV-6.2 TERMINAL ====="
+        AT(0,2).
+
+    IF captureActive {
+
+        PRINT
+            "MODE: CAPTURE VERIFY     "
+            AT(0,3).
+
+    } ELSE IF fineLatched {
+
+        IF thrustActive {
+
+            PRINT
+                "MODE: FINE + YAW TRIM  "
+                AT(0,3).
+
+        } ELSE {
+
+            PRINT
+                "MODE: FINE COAST       "
+                AT(0,3).
+        }.
+
+    } ELSE {
+
+        PRINT
+            "MODE: TGO + YAW TRIM     "
+            AT(0,3).
+    }.
+
+    PRINT
+        "AP: " +
+        ROUND(
+            currentAp/1000,
+            5
+        ) +
+        " km      "
+        AT(0,5).
+
+    PRINT
+        "PE: " +
+        ROUND(
+            currentPe/1000,
+            5
+        ) +
+        " km      "
+        AT(0,6).
+
+    PRINT
+        "INC: " +
+        ROUND(
+            currentInclination,
+            6
+        ) +
+        " deg      "
+        AT(0,7).
+
+    PRINT
+        "PLANE: " +
+        ROUND(
+            planeAngleError,
+            6
+        ) +
+        " deg      "
+        AT(0,8).
+
+    PRINT
+        "AP ERR: " +
+        ROUND(
+            apOrbitError,
+            2
+        ) +
+        " m       "
+        AT(0,9).
+
+    PRINT
+        "PE ERR: " +
+        ROUND(
+            peOrbitError,
+            2
+        ) +
+        " m       "
+        AT(0,10).
+
+    PRINT
+        "RAD VEL: " +
+        ROUND(
+            radialVel,
+            4
+        ) +
+        " m/s     "
+        AT(0,12).
+
+    PRINT
+        "TAN ERR: " +
+        ROUND(
+            tangentialError,
+            4
+        ) +
+        " m/s     "
+        AT(0,13).
+
+    PRINT
+        "YAW TRIM: " +
+        ROUND(
+            actualTrimYaw,
+            3
+        ) +
+        " deg      "
+        AT(0,15).
+
+    PRINT
+        "INC ERR: " +
+        ROUND(
+            inclinationError,
+            5
+        ) +
+        " deg      "
+        AT(0,16).
+
+    PRINT
+        "INC EFF: " +
+        ROUND(
+            inclinationEffectiveness,
+            3
+        ) +
+        "          "
+        AT(0,17).
+
+    PRINT
+        "THROTTLE: " +
+        ROUND(
+            throttleCmd,
+            7
+        ) +
+        "         "
+        AT(0,18).
+
+    PRINT
+        "STEER ERR: " +
+        ROUND(
+            STEERINGMANAGER:ANGLEERROR,
+            3
+        ) +
+        " deg     "
+        AT(0,19).
+
+    PRINT
+        "DV LEFT: " +
+        ROUND(
+            SHIP:DELTAV:CURRENT,
+            1
+        ) +
+        " m/s     "
+        AT(0,21).
+
+    // --------------------------------------------------
+    // GUIDANCE LOG
+    // --------------------------------------------------
+
+    IF MISSIONTIME -
+       lastGuidanceLog >= 0.1 {
+
+        SET modeText TO "TGO".
+        SET actuatorText TO "THRUST".
+
+        IF fineLatched {
+            SET modeText TO "FINE".
+        }.
+
+        IF captureActive {
+            SET modeText TO "CAPTURE".
+        }.
+
+        IF NOT thrustActive {
+            SET actuatorText TO "COAST".
+        }.
+
+        LOG
+            ROUND(MISSIONTIME,3) + "," +
+            modeText + "," +
+            actuatorText + "," +
+            ROUND(SHIP:ALTITUDE,3) + "," +
+            ROUND(currentInclination,7) + "," +
+            ROUND(inclinationError,7) + "," +
+            ROUND(inclinationDerivative,7) + "," +
+            ROUND(inclinationEffectiveness,5) + "," +
+            ROUND(inclinationAccelCmd,6) + "," +
+            ROUND(actualTrimYaw,5) + "," +
+            ROUND(radialVel,5) + "," +
+            ROUND(tangentialVel,5) + "," +
+            ROUND(circularVelNow,5) + "," +
+            ROUND(tangentialError,5) + "," +
+            ROUND(tGo,5) + "," +
+            ROUND(naturalRadialAccel,5) + "," +
+            ROUND(radialReqAccel,5) + "," +
+            ROUND(tanReqAccel,5) + "," +
+            ROUND(radialAllocAccel,5) + "," +
+            ROUND(tanAllocAccel,5) + "," +
+            ROUND(maxAccel,5) + "," +
+            ROUND(baseCommandAccel,7) + "," +
+            ROUND(commandAccel,7) + "," +
+            ROUND(throttleCmd,8) + "," +
+            ROUND(currentAp,3) + "," +
+            ROUND(currentPe,3) + "," +
+            ROUND(apOrbitError,3) + "," +
+            ROUND(peOrbitError,3) + "," +
+            fineLatched + "," +
+            captureActive + "," +
+            ROUND(
+                STEERINGMANAGER:ANGLEERROR,
+                5
+            )
+            TO guidanceLog.
+
+        SET lastGuidanceLog TO
+            MISSIONTIME.
+    }.
+
+    IF MISSIONTIME -
+       lastFlightLog >= 0.5 {
+
+        logState(
+            "SV62_GUIDANCE"
+        ).
+
+        SET lastFlightLog TO
+            MISSIONTIME.
+    }.
+
+    WAIT 0.02.
+}.
+
+// ======================================================
+// FINAL CUTOFF
+// ======================================================
+
+SET throttleCmd TO 0.
+
+LOCK THROTTLE TO throttleCmd.
+
+IF steeringFineTuned {
+
+    SET STEERINGMANAGER:PITCHTS TO originalPitchTS.
+    SET STEERINGMANAGER:YAWTS TO originalYawTS.
+    STEERINGMANAGER:RESETPIDS().
+}.
+
+SET finalRHat TO SHIP:UP:VECTOR.
+
+SET finalOrbitVel TO
+    SHIP:VELOCITY:ORBIT.
+
+SET finalRadialVel TO
+    VDOT(
+        finalOrbitVel,
+        finalRHat
+    ).
+
+SET finalTangentialVec TO
+    finalOrbitVel -
+    (
+        finalRHat *
+        finalRadialVel
+    ).
+
+IF finalTangentialVec:MAG > 1 {
+
+    LOCK STEERING TO
+        finalTangentialVec:NORMALIZED.
+}.
+
+WAIT 0.25.
+
+logState("SV62_CUTOFF").
+
+UNLOCK STEERING.
+
+// ======================================================
+// FINAL REPORT
+// ======================================================
+
+SET finalAp TO SHIP:OBT:APOAPSIS.
+SET finalPe TO SHIP:OBT:PERIAPSIS.
+SET finalInc TO SHIP:OBT:INCLINATION.
+SET finalApError TO orbitTarget - finalAp.
+SET finalPeError TO orbitTarget - finalPe.
+
+SET targetPlaneNormal TO
+    targetPlaneNow().
+
+SET finalRHat TO
+    SHIP:UP:VECTOR.
+
+SET finalOrbitVel TO
+    SHIP:VELOCITY:ORBIT.
+
+SET finalNormalVec TO
+    VCRS(
+        finalOrbitVel,
+        finalRHat
+    ).
+
+IF finalNormalVec:MAG > 0.000001 {
+
+    SET finalOrbitNormal TO
+        finalNormalVec:NORMALIZED.
+
+} ELSE {
+
+    SET finalOrbitNormal TO
+        targetPlaneNormal.
+}.
+
+IF VDOT(
+    finalOrbitNormal,
+    targetPlaneNormal
+   ) < 0 {
+
+    SET finalOrbitNormal TO
+        -finalOrbitNormal.
+}.
+
+SET finalPlaneAngle TO
+    VANG(
+        finalOrbitNormal,
+        targetPlaneNormal
+    ).
+
+CLEARSCREEN.
+
+PRINT "===== SV-6.2 GUIDANCE COMPLETE =====".
+PRINT "".
+PRINT "Target:         " + ROUND(orbitTarget/1000,2) + " km @ " + ROUND(targetInclination,3) + " deg".
+PRINT "".
+PRINT "Final Ap:       " + ROUND(finalAp/1000,5) + " km".
+PRINT "Final Pe:       " + ROUND(finalPe/1000,5) + " km".
+PRINT "Inclination:    " + ROUND(finalInc,7) + " deg".
+PRINT "".
+PRINT "Ap error:       " + ROUND(finalApError,2) + " m".
+PRINT "Pe error:       " + ROUND(finalPeError,2) + " m".
+PRINT "Inc error:      " + ROUND(targetInclination - finalInc,7) + " deg".
+PRINT "Plane geom err: " + ROUND(finalPlaneAngle,7) + " deg".
+PRINT "Inc status:     TARGETED DIRECTLY".
+
+PRINT "".
+PRINT "Remaining dV:   " + ROUND(SHIP:DELTAV:CURRENT,1) + " m/s".
+PRINT "".
+
+IF terminalComplete {
+    PRINT "TARGET ORBIT CAPTURED".
+} ELSE {
+    PRINT "GUIDANCE TERMINATED BEFORE CAPTURE".
+}.
+
+PRINT "".
+PRINT "FLIGHT LOG:".
+PRINT "0:/sv62flight.csv".
+PRINT "".
+PRINT "GUIDANCE LOG:".
+PRINT "0:/sv62guidance.csv".
+PRINT "".
+PRINT "ASCENT LOG:".
+PRINT "0:/sv62ascent.csv".
+
+logState("FINAL").
