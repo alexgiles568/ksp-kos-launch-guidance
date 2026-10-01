@@ -202,3 +202,21 @@
 - Upper-stage and terminal yaw limits reduced to 3°.
 - Fine yaw time constant increased from 4 to 6.
 - SV-3.3 radial/tangential insertion logic retained.
+
+## SV-5.8 80 km / 30° test
+
+- **ORBIT PASS / PLANE MISS** — final 80.00009 × 79.99010 km, inclination 29.81998°, plane error 0.47953°.
+- Booster burnout inclination was 29.98792°, validating the 1365 m/s launch calibration.
+- Delayed upper-stage ignition fixed the SV-5.7 loss-of-control event.
+- Upper-stage cutoff was still close at 29.91880° inclination.
+- During terminal insertion, the old orbital-normal trim reduced total plane-angle error slightly but drove inclination away from 30°, ending near 29.82°.
+
+## SV-5.9 — damped cross-track PD
+
+- Removes node/effectiveness-window trim from the powered guidance law.
+- Uses signed distance from the target inertial plane plus signed cross-plane velocity as the controlled states.
+- Position target time constant: 120 s; velocity damping time constant: 12 s.
+- Cross-track target velocity limited to ±20 m/s.
+- Filtered cross-track acceleration is capped to 2° yaw during both upper-stage ascent and terminal insertion.
+- The correction remains subordinate to the existing radial/tangential burn and vanishes as main insertion thrust goes to zero.
+- Keeps the SV-5.8 1365 m/s launch reference and delayed upper-stage ignition.
