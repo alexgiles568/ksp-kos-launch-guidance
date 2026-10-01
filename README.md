@@ -44,3 +44,5 @@ See `HISTORY.md` for flight-test notes and status.
 - **SV-5.9** — current development branch: 1365 m/s direct launch plus damped cross-track position/velocity yaw trim layered onto SV-3.3 insertion guidance.
 
 - **SV-6.0** — current development branch: direct inclination-only normal/yaw trim layered onto the proven SV-3.3 insertion controller.
+
+- **SV-6.1** — current development branch: local inclination-derived ascent course plus direct inclination-only trim; nominal steering no longer constrains LAN / RAAN.
