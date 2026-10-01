@@ -1,5 +1,5 @@
 // ======================================================
-// SV-5.7 MISSION CONFIG
+// SV-5.8 MISSION CONFIG
 // 0.625 m TWO-STAGE LIQUID LAUNCHER
 //
 // CONFIGURABLE:
@@ -9,24 +9,24 @@
 //
 // Derived from successful SV-4.0.1 / SV-3.3 guidance.
 //
-// SV-5.7:
-// - Calibrates direct-plane launch from the SV-5.5/5.6 tests.
-// - 1800 m/s reference -> ~29.00 deg booster burnout.
-// - 1500 m/s reference -> ~29.61 deg booster burnout.
-// - 1300 m/s is the interpolated first-order 30-deg solution.
-// - Keeps SV-5.6's corrected local-dV plane-trim law.
-// - Gives the powered upper stage more useful yaw authority:
-//   3 deg in higher-Q flight, 5 deg near vacuum.
-// - Terminal yaw trim is capped at 5 deg.
-// - Adds an upper-stage plane-guidance diagnostic CSV.
-// - Tightens fine-burn deadband and inhibits ignition during
-//   large steering errors, preserving meter-class insertion.
+// SV-5.8:
+// - Fixes the SV-5.7 upper-stage loss of control by
+//   delaying booster separation / upper ignition until
+//   dynamic pressure is much lower.
+// - Recalibrates direct-plane launch from the SV-5.6/5.7
+//   booster results: 1365 m/s is the interpolated 30-deg
+//   reference speed.
+// - The terminal yaw oscillation was a threshold-driven
+//   limit cycle, not simply an underdamped steering PID.
+// - Plane trim now uses a hysteretic single correction
+//   window: enter only at useful geometry, then stop when
+//   effectiveness falls and do not chatter back on.
+// - Upper-stage plane trim is inhibited above 0.015 atm
+//   and while steering alignment is poor.
+// - Yaw authority is reduced after the aggressive SV-5.7
+//   test while retaining the corrected local-dV law.
+// - SV-3.3 radial/tangential insertion remains unchanged.
 //
-// FAIRING MUST BE ON ACTION GROUP 1
-//
-// Logs:
-//   0:/sv57flight.csv
-//   0:/sv57guidance.csv
 // ======================================================
 
 CLEARSCREEN.
@@ -46,7 +46,7 @@ SET configGui:X TO 50.
 SET configGui:Y TO 80.
 SET configGui:DRAGGABLE TO TRUE.
 
-SET titleLabel TO configGui:ADDLABEL("SV-5.7 LAUNCH GUIDANCE").
+SET titleLabel TO configGui:ADDLABEL("SV-5.8 LAUNCH GUIDANCE").
 SET titleLabel:STYLE:ALIGN TO "CENTER".
 SET titleLabel:STYLE:HSTRETCH TO TRUE.
 
@@ -156,8 +156,8 @@ configGui:DISPOSE().
 
 SET etaTarget TO 50.
 
-SET sepMinAlt TO 27000.
-SET sepMaxQ TO 0.06.
+SET sepMinAlt TO 33000.
+SET sepMaxQ TO 0.025.
 
 SET fairingMinAlt TO 60000.
 SET fairingMaxQ TO 0.0005.
@@ -181,25 +181,32 @@ SET radialAccelLimit TO 6.
 // Previous tests bracketed the correct 30-deg solution:
 // full circular-speed compensation undershot inclination,
 // while low/current-speed compensation overcorrected.
-// SV-5.5 at 1800 m/s reached ~29.0 deg at booster burnout.
-// SV-5.7 moves the reference to 1500 m/s; the upper-stage
-// yaw loop then removes the remaining small residual.
+// Flight calibration:
+//   SV-5.5: 1800 m/s -> 28.9995 deg booster burnout
+//   SV-5.6: 1500 m/s -> 29.6077 deg booster burnout
+//   SV-5.7: 1300 m/s -> 30.1904 deg booster burnout
+// Linear interpolation puts the 30-deg reference near
+// 1365 m/s.  Upper-stage yaw trim removes the residual.
 
-SET launchPlaneReferenceSpeed TO 1300.
+SET launchPlaneReferenceSpeed TO 1365.
 
 // Small yaw correction during the already-required
 // second-stage burn.  It is never allowed to become a
 // dedicated plane-change maneuver.
 
 SET planeProbeDv TO 1.
-SET planeTrimEffectivenessFloor TO 0.05.
+SET planeTrimEnableEffectiveness TO 0.18.
+SET planeTrimDisableEffectiveness TO 0.10.
 
-SET upperPlaneTrimTimeConstant TO 10.
-SET upperPlaneTrimMaxYaw TO 5.
-SET upperPlaneTrimMaxYawHighQ TO 3.
+SET upperPlaneTrimMaxQ TO 0.015.
+SET upperPlaneTrimMaxSteerError TO 5.
 
-SET terminalPlaneTrimTimeFloor TO 5.
-SET terminalPlaneTrimMaxYaw TO 5.
+SET upperPlaneTrimTimeConstant TO 12.
+SET upperPlaneTrimMaxYaw TO 3.
+SET upperPlaneTrimMaxYawHighQ TO 0.
+
+SET terminalPlaneTrimTimeFloor TO 8.
+SET terminalPlaneTrimMaxYaw TO 3.
 
 SET planeResidualReportTolerance TO 0.05.
 SET terminalIgnitionSteerError TO 8.
@@ -216,7 +223,7 @@ SET planeCaptureTolerance TO 0.001.
 SET captureHoldTime TO 0.75.
 
 SET finePitchTS TO 4.
-SET fineYawTS TO 4.
+SET fineYawTS TO 6.
 
 SET originalPitchTS TO STEERINGMANAGER:PITCHTS.
 SET originalYawTS TO STEERINGMANAGER:YAWTS.
@@ -242,6 +249,11 @@ SET fineLatched TO FALSE.
 SET captureActive TO FALSE.
 SET captureStartMET TO 0.
 
+SET upperPlaneTrimActive TO FALSE.
+SET upperPlaneTrimWindowClosed TO FALSE.
+SET terminalPlaneTrimActive TO FALSE.
+SET terminalPlaneTrimWindowClosed TO FALSE.
+
 SET lowDvStart TO -1.
 
 SET throttleCmd TO 0.
@@ -253,9 +265,9 @@ SET thrustActive TO TRUE.
 // LOG FILES
 // ======================================================
 
-SET flightLog TO "0:/sv57flight.csv".
-SET guidanceLog TO "0:/sv57guidance.csv".
-SET ascentLog TO "0:/sv57ascent.csv".
+SET flightLog TO "0:/sv58flight.csv".
+SET guidanceLog TO "0:/sv58guidance.csv".
+SET ascentLog TO "0:/sv58ascent.csv".
 
 IF EXISTS(flightLog) {
     DELETEPATH(flightLog).
@@ -274,11 +286,11 @@ LOG
 TO flightLog.
 
 LOG
-"MET,mode,actuator,alt_m,inc_deg,plane_angle_err_deg,plane_effectiveness_ratio,plane_trim_accel_mps2,plane_trim_yaw_deg,radial_vel_mps,tangential_vel_mps,circular_vel_mps,tangential_error_mps,tgo_s,natural_radial_accel,radial_req_accel,tangential_req_accel,radial_alloc_accel,tangential_alloc_accel,max_accel,base_command_accel,total_command_accel,throttle,ap_m,pe_m,ap_error_m,pe_error_m,fine_latched,capture,steer_angle_err_deg"
+"MET,mode,actuator,alt_m,inc_deg,plane_angle_err_deg,plane_effectiveness_ratio,plane_trim_active,plane_trim_window_closed,plane_trim_accel_mps2,plane_trim_yaw_deg,radial_vel_mps,tangential_vel_mps,circular_vel_mps,tangential_error_mps,tgo_s,natural_radial_accel,radial_req_accel,tangential_req_accel,radial_alloc_accel,tangential_alloc_accel,max_accel,base_command_accel,total_command_accel,throttle,ap_m,pe_m,ap_error_m,pe_error_m,fine_latched,capture,steer_angle_err_deg"
 TO guidanceLog.
 
 LOG
-"MET,alt_m,inc_deg,plane_angle_err_deg,local_plane_dv_mps,plane_effectiveness_ratio,plane_trim_accel_mps2,plane_trim_yaw_deg,pitch_cmd_deg,throttle,q_atm,ap_m,eta_ap_s,surfspd_mps,radial_vel_mps,tangential_vel_mps,steer_angle_err_deg"
+"MET,alt_m,inc_deg,plane_angle_err_deg,local_plane_dv_mps,plane_effectiveness_ratio,plane_trim_active,plane_trim_window_closed,plane_trim_accel_mps2,plane_trim_yaw_deg,pitch_cmd_deg,throttle,q_atm,ap_m,eta_ap_s,surfspd_mps,radial_vel_mps,tangential_vel_mps,steer_angle_err_deg"
 TO ascentLog.
 
 // ======================================================
@@ -728,7 +740,7 @@ SET guidanceAzimuth TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.7 MISSION =====".
+PRINT "===== SV-5.8 MISSION =====".
 PRINT "".
 PRINT "TARGET ALT: " + ROUND(orbitTarget / 1000,2) + " km".
 PRINT "TARGET INC: " + ROUND(targetInclination,3) + " deg".
@@ -1346,7 +1358,7 @@ UNTIL ascentDone {
     }.
 
     // Local dV required at the current geometry.
-    // This is the key SV-5.7 gain fix.  SV-5.5 multiplied
+    // This is the key SV-5.8 gain fix.  SV-5.5 multiplied
     // ideal plane dV by effectiveness, which REDUCED the
     // command exactly when geometry made each m/s less
     // effective.  The numerical derivative already tells
@@ -1531,13 +1543,48 @@ UNTIL ascentDone {
         maxAccel *
         throttleCmd.
 
+    // --------------------------------------------------
+    // DAMPED PLANE-TRIM WINDOW
+    //
+    // SV-5.7 repeatedly crossed a hard effectiveness
+    // threshold and switched the normal command on/off.
+    // That produced a visible yaw limit cycle.
+    //
+    // SV-5.8 permits one useful correction window. Once
+    // geometry degrades below the disable threshold, trim
+    // stays off for the rest of upper-stage ascent.
+    // --------------------------------------------------
+
+    IF NOT upperPlaneTrimWindowClosed {
+
+        IF NOT upperPlaneTrimActive
+           AND SHIP:Q <= upperPlaneTrimMaxQ
+           AND STEERINGMANAGER:ANGLEERROR <=
+               upperPlaneTrimMaxSteerError
+           AND planeEffectivenessRatio >=
+               planeTrimEnableEffectiveness {
+
+            SET upperPlaneTrimActive TO TRUE.
+        }.
+
+        IF upperPlaneTrimActive
+           AND (
+               planeEffectivenessRatio <=
+                   planeTrimDisableEffectiveness
+               OR SHIP:Q > upperPlaneTrimMaxQ
+               OR STEERINGMANAGER:ANGLEERROR >
+                   upperPlaneTrimMaxSteerError
+           ) {
+
+            SET upperPlaneTrimActive TO FALSE.
+            SET upperPlaneTrimWindowClosed TO TRUE.
+        }.
+    }.
+
     SET requestedPlaneAccel TO 0.
 
-    IF planeAngleError >
-       0.000001
-       AND
-       planeEffectivenessRatio >=
-       planeTrimEffectivenessFloor {
+    IF upperPlaneTrimActive
+       AND planeAngleError > 0.000001 {
 
         SET requestedPlaneAccel TO
             localPlaneDvEstimate /
@@ -1546,12 +1593,6 @@ UNTIL ascentDone {
 
     SET activePlaneYawLimit TO
         upperPlaneTrimMaxYaw.
-
-    IF SHIP:Q > 0.015 {
-
-        SET activePlaneYawLimit TO
-            upperPlaneTrimMaxYawHighQ.
-    }.
 
     SET maxPlaneAccelByYaw TO
         poweredAccel *
@@ -1637,6 +1678,8 @@ UNTIL ascentDone {
             ROUND(planeAngleError,7) + "," +
             ROUND(localPlaneDvEstimate,5) + "," +
             ROUND(planeEffectivenessRatio,5) + "," +
+            upperPlaneTrimActive + "," +
+            upperPlaneTrimWindowClosed + "," +
             ROUND(planeTrimAccel,6) + "," +
             ROUND(actualTrimYaw,5) + "," +
             ROUND(pitchCmd,5) + "," +
@@ -1718,7 +1761,9 @@ UNTIL ascentDone {
             planeEffectivenessRatio,
             3
         ) +
-        "          "
+        " ACTIVE:" +
+        upperPlaneTrimActive +
+        "     "
         AT(0,15).
 
     PRINT
@@ -1836,7 +1881,7 @@ SET exhaustVelocity TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.7 ACQUISITION =====".
+PRINT "===== SV-5.8 ACQUISITION =====".
 
 SET terminalStart TO FALSE.
 SET lastLog TO MISSIONTIME.
@@ -2017,7 +2062,7 @@ UNTIL terminalStart {
 }.
 
 // ======================================================
-// SV-5.7 TERMINAL
+// SV-5.8 TERMINAL
 //
 // Proven radial/tangential SV-3.3 controller with a small
 // normal component layered on as a yaw bias.  The normal
@@ -2028,10 +2073,13 @@ UNTIL terminalStart {
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.7 TERMINAL =====".
+PRINT "===== SV-5.8 TERMINAL =====".
 
 SET terminalStartMET TO
     MISSIONTIME.
+
+SET terminalPlaneTrimActive TO FALSE.
+SET terminalPlaneTrimWindowClosed TO FALSE.
 
 SET guidanceVec TO
     SHIP:PROGRADE:VECTOR.
@@ -2598,13 +2646,33 @@ UNTIL terminalComplete
             terminalPlaneTrimTimeFloor.
     }.
 
+    // One terminal correction window.  Once local plane
+    // geometry falls through the disable threshold, do not
+    // re-enter trim during the same insertion burn.  This
+    // removes SV-5.7's repeated 0/5-degree yaw switching.
+
+    IF NOT terminalPlaneTrimWindowClosed {
+
+        IF NOT terminalPlaneTrimActive
+           AND planeEffectivenessRatio >=
+               planeTrimEnableEffectiveness {
+
+            SET terminalPlaneTrimActive TO TRUE.
+        }.
+
+        IF terminalPlaneTrimActive
+           AND planeEffectivenessRatio <=
+               planeTrimDisableEffectiveness {
+
+            SET terminalPlaneTrimActive TO FALSE.
+            SET terminalPlaneTrimWindowClosed TO TRUE.
+        }.
+    }.
+
     SET requestedPlaneAccel TO 0.
 
-    IF planeAngleError >
-       0.000001
-       AND
-       planeEffectivenessRatio >=
-       planeTrimEffectivenessFloor {
+    IF terminalPlaneTrimActive
+       AND planeAngleError > 0.000001 {
 
         SET requestedPlaneAccel TO
             localPlaneDvEstimate /
@@ -2891,7 +2959,7 @@ UNTIL terminalComplete
     // --------------------------------------------------
 
     PRINT
-        "===== SV-5.7 TERMINAL ====="
+        "===== SV-5.8 TERMINAL ====="
         AT(0,2).
 
     IF captureActive {
@@ -3018,7 +3086,9 @@ UNTIL terminalComplete
             planeEffectivenessRatio,
             3
         ) +
-        "          "
+        " ACTIVE:" +
+        terminalPlaneTrimActive +
+        "     "
         AT(0,17).
 
     PRINT
@@ -3078,6 +3148,8 @@ UNTIL terminalComplete
             ROUND(currentInclination,7) + "," +
             ROUND(planeAngleError,7) + "," +
             ROUND(planeEffectivenessRatio,5) + "," +
+            terminalPlaneTrimActive + "," +
+            terminalPlaneTrimWindowClosed + "," +
             ROUND(planeTrimAccel,6) + "," +
             ROUND(actualTrimYaw,5) + "," +
             ROUND(radialVel,5) + "," +
@@ -3114,7 +3186,7 @@ UNTIL terminalComplete
        lastFlightLog >= 0.5 {
 
         logState(
-            "SV57_GUIDANCE"
+            "SV58_GUIDANCE"
         ).
 
         SET lastFlightLog TO
@@ -3165,7 +3237,7 @@ IF finalTangentialVec:MAG > 1 {
 
 WAIT 0.25.
 
-logState("SV57_CUTOFF").
+logState("SV58_CUTOFF").
 
 UNLOCK STEERING.
 
@@ -3222,7 +3294,7 @@ SET finalPlaneAngle TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-5.7 GUIDANCE COMPLETE =====".
+PRINT "===== SV-5.8 GUIDANCE COMPLETE =====".
 PRINT "".
 PRINT "Target:         " + ROUND(orbitTarget/1000,2) + " km @ " + ROUND(targetInclination,3) + " deg".
 PRINT "".
@@ -3253,12 +3325,12 @@ IF terminalComplete {
 
 PRINT "".
 PRINT "FLIGHT LOG:".
-PRINT "0:/sv57flight.csv".
+PRINT "0:/sv58flight.csv".
 PRINT "".
 PRINT "GUIDANCE LOG:".
-PRINT "0:/sv57guidance.csv".
+PRINT "0:/sv58guidance.csv".
 PRINT "".
 PRINT "ASCENT LOG:".
-PRINT "0:/sv57ascent.csv".
+PRINT "0:/sv58ascent.csv".
 
 logState("FINAL").
