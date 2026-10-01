@@ -1,5 +1,5 @@
 // ======================================================
-// SV-6.2 MISSION CONFIG
+// SV-6.3 MISSION CONFIG
 // 0.625 m TWO-STAGE LIQUID LAUNCHER
 //
 // CONFIGURABLE:
@@ -9,30 +9,36 @@
 //
 // Derived from successful SV-4.0.1 / SV-3.3 guidance.
 //
-// SV-6.2:
-// - Keeps SV-6.1's inclination-derived local inertial course.
-// - Fixes the polar booster miss by replacing the fixed
-//   1365 m/s rotation-compensation approximation with a
-//   speed-matched solution once horizontal speed is high
-//   enough.
+// SV-6.3:
+// - Changes plane guidance from "point along the desired
+//   course" to "drive the ACTUAL inertial horizontal
+//   velocity vector onto the desired inclination course."
 //
-//   Given desired inertial horizontal unit vector u,
-//   surface horizontal speed S, and local rotational
-//   velocity R, solve:
+// - At each latitude, inclinationAlongNow() still defines
+//   the valid horizontal velocity direction without fixing
+//   LAN / RAAN.
 //
-//       |V*u - R| = S
+// - Booster guidance keeps SV-6.2's rotation-compensated
+//   nominal heading, then adds a small feedback yaw from
+//   measured cross-course inertial velocity.
 //
-//   for the positive inertial speed V, then steer along
-//   V*u - R in the rotating surface frame.
+// - Upper-stage and terminal guidance directly damp the
+//   horizontal velocity component perpendicular to the
+//   desired course:
 //
-// - Blends smoothly from the proven fixed-reference heading
-//   at low speed to the exact speed-matched heading.
-// - Pre-points the upper stage during coast and delays
-//   ignition until q is low and attitude is settled.
-// - Keeps SV-6.0/6.1's direct inclination trim and the
-//   proven SV-3.3 radial/tangential insertion controller.
-// - Fixes duplicated inclination columns in ascent/guidance
-//   CSV logging.
+//       a_cross = -v_cross / tau
+//
+//   with filtering and strict yaw limits.
+//
+// - This explicitly cancels unwanted eastward inertial
+//   velocity on polar launches instead of hoping heading
+//   geometry removes it.
+//
+// - Cross-course authority is always subordinate to the
+//   existing powered burn; it cannot become a standalone
+//   plane-change maneuver.
+//
+// - SV-3.3 radial/tangential insertion remains unchanged.
 //
 // ======================================================
 
@@ -53,7 +59,7 @@ SET configGui:X TO 50.
 SET configGui:Y TO 80.
 SET configGui:DRAGGABLE TO TRUE.
 
-SET titleLabel TO configGui:ADDLABEL("SV-6.2 LAUNCH GUIDANCE").
+SET titleLabel TO configGui:ADDLABEL("SV-6.3 LAUNCH GUIDANCE").
 SET titleLabel:STYLE:ALIGN TO "CENTER".
 SET titleLabel:STYLE:HSTRETCH TO TRUE.
 
@@ -214,34 +220,38 @@ SET upperClearanceMinTime TO 1.80.
 // second-stage burn.  It is never allowed to become a
 // dedicated plane-change maneuver.
 
-// Inclination-only trim controller.
+// Horizontal-velocity course servo.
 //
-// A +/-1 m/s hypothetical burn along the current orbital
-// normal measures the instantaneous sensitivity:
+// inclinationAlongNow() defines the desired local inertial
+// horizontal direction.  We measure the actual inertial
+// horizontal velocity perpendicular to that direction and
+// damp it toward zero.
 //
-//   d(inclination) / d(normal dV)
-//
-// The requested inclination-rate correction is divided by
-// that measured sensitivity.  Effectiveness weighting then
-// smoothly fades the command near geometries where normal
-// thrust mostly changes LAN instead of inclination.
+// Booster uses the same measured velocity error as a small
+// heading/yaw feedback on top of SV-6.2's rotation-matched
+// nominal heading.
 
-SET inclinationProbeDv TO 1.
+SET boosterCourseFeedbackStartSpeed TO 300.
+SET boosterCourseFeedbackReferenceSpeed TO 1365.
+SET boosterCourseFeedbackGain TO 1.0.
+SET boosterCourseMaxYaw TO 4.
 
-// Legacy full-plane diagnostics still use this separate
-// +/-1 m/s probe. It is diagnostic only in SV-6.2.
+// Upper stage: direct lateral acceleration servo.
+SET upperCourseVelocityTime TO 10.
+SET upperCourseFilterGain TO 0.10.
+SET upperCourseMaxYaw TO 4.
+SET upperCourseMaxQ TO 0.010.
+SET upperCourseMaxSteerError TO 6.
+
+// Terminal insertion: same concept, with slightly lower
+// authority so the meter-class orbit solution remains the
+// dominant controller.
+SET terminalCourseVelocityTime TO 8.
+SET terminalCourseFilterGain TO 0.10.
+SET terminalCourseMaxYaw TO 3.
+
+// Legacy full-plane diagnostics still use this probe.
 SET planeProbeDv TO 1.
-
-SET inclinationDerivativeFloor TO 0.0005.
-SET inclinationFilterGain TO 0.12.
-
-SET upperInclinationTimeConstant TO 12.
-SET upperInclinationMaxQ TO 0.010.
-SET upperInclinationMaxSteerError TO 6.
-SET upperInclinationMaxYaw TO 2.
-
-SET terminalInclinationTimeConstant TO 10.
-SET terminalInclinationMaxYaw TO 2.
 
 SET planeResidualReportTolerance TO 0.05.
 SET terminalIgnitionSteerError TO 8.
@@ -284,8 +294,8 @@ SET fineLatched TO FALSE.
 SET captureActive TO FALSE.
 SET captureStartMET TO 0.
 
-SET upperInclinationAccelFiltered TO 0.
-SET terminalInclinationAccelFiltered TO 0.
+SET upperCourseAccelFiltered TO 0.
+SET terminalCourseAccelFiltered TO 0.
 
 SET lowDvStart TO -1.
 
@@ -298,9 +308,9 @@ SET thrustActive TO TRUE.
 // LOG FILES
 // ======================================================
 
-SET flightLog TO "0:/sv62flight.csv".
-SET guidanceLog TO "0:/sv62guidance.csv".
-SET ascentLog TO "0:/sv62ascent.csv".
+SET flightLog TO "0:/sv63flight.csv".
+SET guidanceLog TO "0:/sv63guidance.csv".
+SET ascentLog TO "0:/sv63ascent.csv".
 
 IF EXISTS(flightLog) {
     DELETEPATH(flightLog).
@@ -319,11 +329,11 @@ LOG
 TO flightLog.
 
 LOG
-"MET,mode,actuator,alt_m,inc_deg,inc_error_deg,inc_derivative_deg_per_mps,inc_effectiveness,inc_accel_cmd_mps2,inc_trim_yaw_deg,radial_vel_mps,tangential_vel_mps,circular_vel_mps,tangential_error_mps,tgo_s,natural_radial_accel,radial_req_accel,tangential_req_accel,radial_alloc_accel,tangential_alloc_accel,max_accel,base_command_accel,total_command_accel,throttle,ap_m,pe_m,ap_error_m,pe_error_m,fine_latched,capture,steer_angle_err_deg"
+"MET,mode,actuator,alt_m,inc_deg,inc_error_deg,course_cross_vel_mps,course_angle_err_deg,course_accel_cmd_mps2,course_trim_yaw_deg,radial_vel_mps,tangential_vel_mps,circular_vel_mps,tangential_error_mps,tgo_s,natural_radial_accel,radial_req_accel,tangential_req_accel,radial_alloc_accel,tangential_alloc_accel,max_accel,base_command_accel,total_command_accel,throttle,ap_m,pe_m,ap_error_m,pe_error_m,fine_latched,capture,steer_angle_err_deg"
 TO guidanceLog.
 
 LOG
-"MET,alt_m,inc_deg,inc_error_deg,inc_derivative_deg_per_mps,inc_effectiveness,inc_accel_cmd_mps2,inc_trim_yaw_deg,pitch_cmd_deg,throttle,q_atm,ap_m,eta_ap_s,surfspd_mps,radial_vel_mps,tangential_vel_mps,steer_angle_err_deg"
+"MET,alt_m,inc_deg,inc_error_deg,course_cross_vel_mps,course_angle_err_deg,course_accel_cmd_mps2,course_trim_yaw_deg,pitch_cmd_deg,throttle,q_atm,ap_m,eta_ap_s,surfspd_mps,radial_vel_mps,tangential_vel_mps,steer_angle_err_deg"
 TO ascentLog.
 
 // ======================================================
@@ -856,7 +866,7 @@ SET guidanceAzimuth TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-6.2 MISSION =====".
+PRINT "===== SV-6.3 MISSION =====".
 PRINT "".
 PRINT "TARGET ALT: " + ROUND(orbitTarget / 1000,2) + " km".
 PRINT "TARGET INC: " + ROUND(targetInclination,3) + " deg".
@@ -1180,6 +1190,79 @@ UNTIL boosterBurnout {
             360.
     }.
 
+    // --------------------------------------------------
+    // BOOSTER HORIZONTAL-VELOCITY FEEDBACK
+    //
+    // The nominal heading handles Kerbin rotation.  This
+    // feedback corrects whatever inertial horizontal
+    // velocity still exists perpendicular to the desired
+    // inclination course.
+    // --------------------------------------------------
+
+    SET courseRightHat TO
+        VCRS(
+            planeUp,
+            planeAlongHat
+        ).
+
+    IF courseRightHat:MAG >
+       0.000001 {
+
+        SET courseRightHat TO
+            courseRightHat:NORMALIZED.
+    } ELSE {
+
+        SET courseRightHat TO
+            planeEast.
+    }.
+
+    SET boosterCourseCrossVel TO
+        VDOT(
+            planeHorizontalVel,
+            courseRightHat
+        ).
+
+    SET boosterCourseYaw TO 0.
+
+    IF surfaceHorizontalSpeed >=
+       boosterCourseFeedbackStartSpeed {
+
+        SET boosterCourseYaw TO
+            -
+            boosterCourseFeedbackGain
+            *
+            ARCTAN2(
+                boosterCourseCrossVel,
+                boosterCourseFeedbackReferenceSpeed
+            ).
+
+        IF boosterCourseYaw >
+           boosterCourseMaxYaw {
+
+            SET boosterCourseYaw TO
+                boosterCourseMaxYaw.
+        }.
+
+        IF boosterCourseYaw <
+           -boosterCourseMaxYaw {
+
+            SET boosterCourseYaw TO
+                -boosterCourseMaxYaw.
+        }.
+    }.
+
+    SET guidanceAzimuth TO
+        guidanceAzimuth +
+        boosterCourseYaw.
+
+    IF guidanceAzimuth < 0 {
+        SET guidanceAzimuth TO guidanceAzimuth + 360.
+    }.
+
+    IF guidanceAzimuth >= 360 {
+        SET guidanceAzimuth TO guidanceAzimuth - 360.
+    }.
+
     IF surfSpd < 40 {
 
         SET pitchCmd TO 90.
@@ -1260,8 +1343,8 @@ UNTIL boosterBurnout {
     PRINT "BOOSTER ASCENT        " AT(0,7).
     PRINT "ALT: " + ROUND(SHIP:ALTITUDE/1000,2) + " km      " AT(0,10).
     PRINT "AZ: " + ROUND(guidanceAzimuth,2) + " deg      " AT(0,11).
-    PRINT "PLN: " + ROUND(ascentPlaneErrorM,1) + " m       " AT(0,12).
-    PRINT "XVEL: " + ROUND(ascentCrossVel,1) + " m/s      " AT(0,13).
+    PRINT "CV ERR: " + ROUND(boosterCourseCrossVel,1) + " m/s   " AT(0,12).
+    PRINT "YAW FB: " + ROUND(boosterCourseYaw,2) + " deg      " AT(0,13).
     PRINT "AP: " + ROUND(SHIP:OBT:APOAPSIS/1000,2) + " km      " AT(0,14).
     PRINT "Q: " + ROUND(SHIP:Q,3) + " atm      " AT(0,15).
 
@@ -1684,7 +1767,7 @@ UNTIL ascentDone {
     }.
 
     // Local dV required at the current geometry.
-    // This is the key SV-6.2 gain fix.  SV-5.5 multiplied
+    // This is the key SV-6.3 gain fix.  SV-5.5 multiplied
     // ideal plane dV by effectiveness, which REDUCED the
     // command exactly when geometry made each m/s less
     // effective.  The numerical derivative already tells
@@ -1870,7 +1953,12 @@ UNTIL ascentDone {
         throttleCmd.
 
     // --------------------------------------------------
-    // INCLINATION-ONLY NORMAL TRIM
+    // HORIZONTAL-VELOCITY COURSE SERVO
+    //
+    // Rather than correcting inclination as a scalar after
+    // the fact, drive the actual inertial horizontal
+    // velocity onto the local course that corresponds to
+    // the requested inclination.
     // --------------------------------------------------
 
     SET currentInclination TO
@@ -1880,205 +1968,110 @@ UNTIL ascentDone {
         targetInclination -
         currentInclination.
 
-    SET bodyPoleNow TO
-        SHIP:BODY:ANGULARVEL.
+    SET desiredCourseHat TO
+        inclinationAlongNow().
 
-    IF bodyPoleNow:MAG <
-       0.0000001 {
+    SET courseRightHat TO
+        VCRS(
+            planeUp,
+            desiredCourseHat
+        ).
 
-        SET bodyPoleNow TO
-            inertialPole0.
+    IF courseRightHat:MAG >
+       0.000001 {
+
+        SET courseRightHat TO
+            courseRightHat:NORMALIZED.
 
     } ELSE {
 
-        SET bodyPoleNow TO
-            bodyPoleNow:NORMALIZED.
-    }.
-
-    SET inclinationNormalUnit TO
-        VCRS(
-            planeUp,
-            orbitVelVec
-        ).
-
-    IF inclinationNormalUnit:MAG <
-       0.000001 {
-
-        SET inclinationNormalUnit TO
+        SET courseRightHat TO
             targetPlaneNormal.
-
-    } ELSE {
-
-        SET inclinationNormalUnit TO
-            inclinationNormalUnit:NORMALIZED.
     }.
 
-    SET plusIncProbeVel TO
-        orbitVelVec +
-        (
-            inclinationNormalUnit *
-            inclinationProbeDv
+    SET courseAlongVel TO
+        VDOT(
+            tangentialVelVec,
+            desiredCourseHat
         ).
 
-    SET minusIncProbeVel TO
-        orbitVelVec -
-        (
-            inclinationNormalUnit *
-            inclinationProbeDv
+    SET courseCrossVel TO
+        VDOT(
+            tangentialVelVec,
+            courseRightHat
         ).
 
-    SET plusIncProbeNormal TO
-        VCRS(
-            planeUp,
-            plusIncProbeVel
+    SET courseAlongForAngle TO
+        ABS(
+            courseAlongVel
         ).
 
-    SET minusIncProbeNormal TO
-        VCRS(
-            planeUp,
-            minusIncProbeVel
+    IF courseAlongForAngle < 1 {
+        SET courseAlongForAngle TO 1.
+    }.
+
+    SET courseAngleError TO
+        ARCTAN2(
+            courseCrossVel,
+            courseAlongForAngle
         ).
 
-    IF plusIncProbeNormal:MAG >
-       0.000001 {
+    SET courseAccelRaw TO
+        -
+        courseCrossVel /
+        upperCourseVelocityTime.
 
-        SET plusIncProbeNormal TO
-            plusIncProbeNormal:NORMALIZED.
-    }.
-
-    IF minusIncProbeNormal:MAG >
-       0.000001 {
-
-        SET minusIncProbeNormal TO
-            minusIncProbeNormal:NORMALIZED.
-    }.
-
-    SET plusProbeInclination TO
-        VANG(
-            plusIncProbeNormal,
-            bodyPoleNow
-        ).
-
-    SET minusProbeInclination TO
-        VANG(
-            minusIncProbeNormal,
-            bodyPoleNow
-        ).
-
-    SET inclinationDerivative TO
-        (
-            plusProbeInclination -
-            minusProbeInclination
-        )
-        /
-        (
-            2 *
-            inclinationProbeDv
-        ).
-
-    SET idealInclinationDerivative TO 0.
-
-    IF tangentialVel > 1 {
-
-        SET idealInclinationDerivative TO
-            57.2957795 /
-            tangentialVel.
-    }.
-
-    SET inclinationEffectiveness TO 0.
-
-    IF idealInclinationDerivative >
-       0.0000001 {
-
-        SET inclinationEffectiveness TO
-            ABS(
-                inclinationDerivative
-            )
-            /
-            idealInclinationDerivative.
-    }.
-
-    IF inclinationEffectiveness > 1 {
-        SET inclinationEffectiveness TO 1.
-    }.
-
-    IF inclinationEffectiveness < 0 {
-        SET inclinationEffectiveness TO 0.
-    }.
-
-    SET inclinationAccelRaw TO 0.
-
-    IF ABS(
-        inclinationDerivative
-       ) >=
-       inclinationDerivativeFloor {
-
-        SET inclinationAccelRaw TO
-            (
-                inclinationError /
-                (
-                    inclinationDerivative *
-                    upperInclinationTimeConstant
-                )
-            )
-            *
-            (
-                inclinationEffectiveness^2
-            ).
-    }.
-
-    SET inclinationAccelAllowed TO TRUE.
+    SET courseAccelAllowed TO TRUE.
 
     IF SHIP:Q >
-       upperInclinationMaxQ {
+       upperCourseMaxQ {
 
-        SET inclinationAccelAllowed TO FALSE.
+        SET courseAccelAllowed TO FALSE.
     }.
 
     IF ABS(
         STEERINGMANAGER:ANGLEERROR
        ) >
-       upperInclinationMaxSteerError {
+       upperCourseMaxSteerError {
 
-        SET inclinationAccelAllowed TO FALSE.
+        SET courseAccelAllowed TO FALSE.
     }.
 
-    IF NOT inclinationAccelAllowed {
-
-        SET inclinationAccelRaw TO 0.
+    IF NOT courseAccelAllowed {
+        SET courseAccelRaw TO 0.
     }.
 
-    SET upperInclinationAccelFiltered TO
-        upperInclinationAccelFiltered
+    SET upperCourseAccelFiltered TO
+        upperCourseAccelFiltered
         +
-        inclinationFilterGain
+        upperCourseFilterGain
         *
         (
-            inclinationAccelRaw -
-            upperInclinationAccelFiltered
+            courseAccelRaw -
+            upperCourseAccelFiltered
         ).
 
-    SET maxInclinationAccelByYaw TO
+    SET maxCourseAccelByYaw TO
         poweredAccel *
         TAN(
-            upperInclinationMaxYaw
+            upperCourseMaxYaw
         ).
 
-    SET inclinationAccelCmd TO
-        upperInclinationAccelFiltered.
+    SET courseAccelCmd TO
+        upperCourseAccelFiltered.
 
-    IF inclinationAccelCmd >
-       maxInclinationAccelByYaw {
+    IF courseAccelCmd >
+       maxCourseAccelByYaw {
 
-        SET inclinationAccelCmd TO
-            maxInclinationAccelByYaw.
+        SET courseAccelCmd TO
+            maxCourseAccelByYaw.
     }.
 
-    IF inclinationAccelCmd <
-       -maxInclinationAccelByYaw {
+    IF courseAccelCmd <
+       -maxCourseAccelByYaw {
 
-        SET inclinationAccelCmd TO
-            -maxInclinationAccelByYaw.
+        SET courseAccelCmd TO
+            -maxCourseAccelByYaw.
     }.
 
     SET desiredSteeringVec TO
@@ -2088,8 +2081,8 @@ UNTIL ascentDone {
         )
         +
         (
-            inclinationNormalUnit *
-            inclinationAccelCmd
+            courseRightHat *
+            courseAccelCmd
         ).
 
     IF desiredSteeringVec:MAG >
@@ -2130,7 +2123,7 @@ UNTIL ascentDone {
 
         SET actualTrimYaw TO
             ARCTAN2(
-                inclinationAccelCmd,
+                courseAccelCmd,
                 poweredAccel
             ).
     }.
@@ -2143,9 +2136,9 @@ UNTIL ascentDone {
             ROUND(SHIP:ALTITUDE,3) + "," +
             ROUND(currentInclination,7) + "," +
             ROUND(inclinationError,7) + "," +
-            ROUND(inclinationDerivative,7) + "," +
-            ROUND(inclinationEffectiveness,5) + "," +
-            ROUND(inclinationAccelCmd,6) + "," +
+            ROUND(courseCrossVel,5) + "," +
+            ROUND(courseAngleError,7) + "," +
+            ROUND(courseAccelCmd,6) + "," +
             ROUND(actualTrimYaw,5) + "," +
             ROUND(pitchCmd,5) + "," +
             ROUND(throttleCmd,7) + "," +
@@ -2221,12 +2214,12 @@ UNTIL ascentDone {
         AT(0,14).
 
     PRINT
-        "INC EFF: " +
+        "COURSE V: " +
         ROUND(
-            inclinationEffectiveness,
-            3
+            courseCrossVel,
+            2
         ) +
-        "          "
+        " m/s      "
         AT(0,15).
 
     PRINT
@@ -2344,7 +2337,7 @@ SET exhaustVelocity TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-6.2 ACQUISITION =====".
+PRINT "===== SV-6.3 ACQUISITION =====".
 
 SET terminalStart TO FALSE.
 SET lastLog TO MISSIONTIME.
@@ -2525,7 +2518,7 @@ UNTIL terminalStart {
 }.
 
 // ======================================================
-// SV-6.2 TERMINAL
+// SV-6.3 TERMINAL
 //
 // Proven radial/tangential SV-3.3 controller with a small
 // normal component layered on as a yaw bias.  The normal
@@ -2536,12 +2529,12 @@ UNTIL terminalStart {
 
 CLEARSCREEN.
 
-PRINT "===== SV-6.2 TERMINAL =====".
+PRINT "===== SV-6.3 TERMINAL =====".
 
 SET terminalStartMET TO
     MISSIONTIME.
 
-SET terminalInclinationAccelFiltered TO 0.
+SET terminalCourseAccelFiltered TO 0.
 
 SET guidanceVec TO
     SHIP:PROGRADE:VECTOR.
@@ -3088,202 +3081,109 @@ UNTIL terminalComplete
         orbitGuidanceVec:MAG.
 
     // --------------------------------------------------
-    // INCLINATION-ONLY NORMAL TRIM
+    // HORIZONTAL-VELOCITY COURSE SERVO
     //
-    // The mission requests inclination, not LAN.  Control
-    // only that scalar orbital element and leave the node
-    // longitude produced by the direct launch unconstrained.
+    // Preserve the desired inclination by damping the
+    // inertial horizontal velocity component perpendicular
+    // to the local inclination course.  Authority scales
+    // with the radial/tangential burn already in progress.
     // --------------------------------------------------
 
     SET inclinationError TO
         targetInclination -
         currentInclination.
 
-    SET bodyPoleNow TO
-        SHIP:BODY:ANGULARVEL.
+    SET desiredCourseHat TO
+        inclinationAlongNow().
 
-    IF bodyPoleNow:MAG <
-       0.0000001 {
+    SET courseRightHat TO
+        VCRS(
+            upVec,
+            desiredCourseHat
+        ).
 
-        SET bodyPoleNow TO
-            inertialPole0.
+    IF courseRightHat:MAG >
+       0.000001 {
+
+        SET courseRightHat TO
+            courseRightHat:NORMALIZED.
 
     } ELSE {
 
-        SET bodyPoleNow TO
-            bodyPoleNow:NORMALIZED.
-    }.
-
-    SET inclinationNormalUnit TO
-        VCRS(
-            upVec,
-            orbitVelVec
-        ).
-
-    IF inclinationNormalUnit:MAG <
-       0.000001 {
-
-        SET inclinationNormalUnit TO
+        SET courseRightHat TO
             targetPlaneNormal.
-
-    } ELSE {
-
-        SET inclinationNormalUnit TO
-            inclinationNormalUnit:NORMALIZED.
     }.
 
-    SET plusIncProbeVel TO
-        orbitVelVec +
-        (
-            inclinationNormalUnit *
-            inclinationProbeDv
+    SET courseAlongVel TO
+        VDOT(
+            tangentialVelVec,
+            desiredCourseHat
         ).
 
-    SET minusIncProbeVel TO
-        orbitVelVec -
-        (
-            inclinationNormalUnit *
-            inclinationProbeDv
+    SET courseCrossVel TO
+        VDOT(
+            tangentialVelVec,
+            courseRightHat
         ).
 
-    SET plusIncProbeNormal TO
-        VCRS(
-            upVec,
-            plusIncProbeVel
+    SET courseAlongForAngle TO
+        ABS(
+            courseAlongVel
         ).
 
-    SET minusIncProbeNormal TO
-        VCRS(
-            upVec,
-            minusIncProbeVel
+    IF courseAlongForAngle < 1 {
+        SET courseAlongForAngle TO 1.
+    }.
+
+    SET courseAngleError TO
+        ARCTAN2(
+            courseCrossVel,
+            courseAlongForAngle
         ).
 
-    IF plusIncProbeNormal:MAG >
-       0.000001 {
+    SET courseAccelRaw TO
+        -
+        courseCrossVel /
+        terminalCourseVelocityTime.
 
-        SET plusIncProbeNormal TO
-            plusIncProbeNormal:NORMALIZED.
-    }.
-
-    IF minusIncProbeNormal:MAG >
-       0.000001 {
-
-        SET minusIncProbeNormal TO
-            minusIncProbeNormal:NORMALIZED.
-    }.
-
-    SET plusProbeInclination TO
-        VANG(
-            plusIncProbeNormal,
-            bodyPoleNow
-        ).
-
-    SET minusProbeInclination TO
-        VANG(
-            minusIncProbeNormal,
-            bodyPoleNow
-        ).
-
-    SET inclinationDerivative TO
-        (
-            plusProbeInclination -
-            minusProbeInclination
-        )
-        /
-        (
-            2 *
-            inclinationProbeDv
-        ).
-
-    SET idealInclinationDerivative TO 0.
-
-    IF tangentialVel > 1 {
-
-        SET idealInclinationDerivative TO
-            57.2957795 /
-            tangentialVel.
-    }.
-
-    SET inclinationEffectiveness TO 0.
-
-    IF idealInclinationDerivative >
-       0.0000001 {
-
-        SET inclinationEffectiveness TO
-            ABS(
-                inclinationDerivative
-            )
-            /
-            idealInclinationDerivative.
-    }.
-
-    IF inclinationEffectiveness > 1 {
-        SET inclinationEffectiveness TO 1.
-    }.
-
-    IF inclinationEffectiveness < 0 {
-        SET inclinationEffectiveness TO 0.
-    }.
-
-    SET inclinationAccelRaw TO 0.
-
-    IF ABS(
-        inclinationDerivative
-       ) >=
-       inclinationDerivativeFloor {
-
-        SET inclinationAccelRaw TO
-            (
-                inclinationError /
-                (
-                    inclinationDerivative *
-                    terminalInclinationTimeConstant
-                )
-            )
-            *
-            (
-                inclinationEffectiveness^2
-            ).
-    }.
-
-    SET terminalInclinationAccelFiltered TO
-        terminalInclinationAccelFiltered
+    SET terminalCourseAccelFiltered TO
+        terminalCourseAccelFiltered
         +
-        inclinationFilterGain
+        terminalCourseFilterGain
         *
         (
-            inclinationAccelRaw -
-            terminalInclinationAccelFiltered
+            courseAccelRaw -
+            terminalCourseAccelFiltered
         ).
 
-    SET maxInclinationAccelByYaw TO
+    SET maxCourseAccelByYaw TO
         baseCommandAccel *
         TAN(
-            terminalInclinationMaxYaw
+            terminalCourseMaxYaw
         ).
 
-    SET inclinationAccelCmd TO
-        terminalInclinationAccelFiltered.
+    SET courseAccelCmd TO
+        terminalCourseAccelFiltered.
 
-    IF inclinationAccelCmd >
-       maxInclinationAccelByYaw {
+    IF courseAccelCmd >
+       maxCourseAccelByYaw {
 
-        SET inclinationAccelCmd TO
-            maxInclinationAccelByYaw.
+        SET courseAccelCmd TO
+            maxCourseAccelByYaw.
     }.
 
-    IF inclinationAccelCmd <
-       -maxInclinationAccelByYaw {
+    IF courseAccelCmd <
+       -maxCourseAccelByYaw {
 
-        SET inclinationAccelCmd TO
-            -maxInclinationAccelByYaw.
+        SET courseAccelCmd TO
+            -maxCourseAccelByYaw.
     }.
 
     SET guidanceVec TO
         orbitGuidanceVec +
         (
-            inclinationNormalUnit *
-            inclinationAccelCmd
+            courseRightHat *
+            courseAccelCmd
         ).
 
     SET commandAccel TO
@@ -3296,7 +3196,7 @@ UNTIL terminalComplete
 
         SET actualTrimYaw TO
             ARCTAN2(
-                inclinationAccelCmd,
+                courseAccelCmd,
                 baseCommandAccel
             ).
     }.
@@ -3539,7 +3439,7 @@ UNTIL terminalComplete
     // --------------------------------------------------
 
     PRINT
-        "===== SV-6.2 TERMINAL ====="
+        "===== SV-6.3 TERMINAL ====="
         AT(0,2).
 
     IF captureActive {
@@ -3661,12 +3561,12 @@ UNTIL terminalComplete
         AT(0,16).
 
     PRINT
-        "INC EFF: " +
+        "COURSE V: " +
         ROUND(
-            inclinationEffectiveness,
-            3
+            courseCrossVel,
+            2
         ) +
-        "          "
+        " m/s      "
         AT(0,17).
 
     PRINT
@@ -3725,9 +3625,9 @@ UNTIL terminalComplete
             ROUND(SHIP:ALTITUDE,3) + "," +
             ROUND(currentInclination,7) + "," +
             ROUND(inclinationError,7) + "," +
-            ROUND(inclinationDerivative,7) + "," +
-            ROUND(inclinationEffectiveness,5) + "," +
-            ROUND(inclinationAccelCmd,6) + "," +
+            ROUND(courseCrossVel,5) + "," +
+            ROUND(courseAngleError,7) + "," +
+            ROUND(courseAccelCmd,6) + "," +
             ROUND(actualTrimYaw,5) + "," +
             ROUND(radialVel,5) + "," +
             ROUND(tangentialVel,5) + "," +
@@ -3763,7 +3663,7 @@ UNTIL terminalComplete
        lastFlightLog >= 0.5 {
 
         logState(
-            "SV62_GUIDANCE"
+            "SV63_GUIDANCE"
         ).
 
         SET lastFlightLog TO
@@ -3814,7 +3714,7 @@ IF finalTangentialVec:MAG > 1 {
 
 WAIT 0.25.
 
-logState("SV62_CUTOFF").
+logState("SV63_CUTOFF").
 
 UNLOCK STEERING.
 
@@ -3871,7 +3771,7 @@ SET finalPlaneAngle TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-6.2 GUIDANCE COMPLETE =====".
+PRINT "===== SV-6.3 GUIDANCE COMPLETE =====".
 PRINT "".
 PRINT "Target:         " + ROUND(orbitTarget/1000,2) + " km @ " + ROUND(targetInclination,3) + " deg".
 PRINT "".
@@ -3897,12 +3797,12 @@ IF terminalComplete {
 
 PRINT "".
 PRINT "FLIGHT LOG:".
-PRINT "0:/sv62flight.csv".
+PRINT "0:/sv63flight.csv".
 PRINT "".
 PRINT "GUIDANCE LOG:".
-PRINT "0:/sv62guidance.csv".
+PRINT "0:/sv63guidance.csv".
 PRINT "".
 PRINT "ASCENT LOG:".
-PRINT "0:/sv62ascent.csv".
+PRINT "0:/sv63ascent.csv".
 
 logState("FINAL").
