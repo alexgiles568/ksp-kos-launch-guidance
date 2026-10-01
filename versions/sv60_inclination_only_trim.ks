@@ -207,6 +207,11 @@ SET launchPlaneReferenceSpeed TO 1365.
 // thrust mostly changes LAN instead of inclination.
 
 SET inclinationProbeDv TO 1.
+
+// Legacy full-plane diagnostics still use this separate
+// +/-1 m/s probe. It is diagnostic only in SV-6.0.
+SET planeProbeDv TO 1.
+
 SET inclinationDerivativeFloor TO 0.0005.
 SET inclinationFilterGain TO 0.12.
 
