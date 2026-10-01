@@ -1,5 +1,5 @@
 // ======================================================
-// SV-6.0 MISSION CONFIG
+// SV-6.1 MISSION CONFIG
 // 0.625 m TWO-STAGE LIQUID LAUNCHER
 //
 // CONFIGURABLE:
@@ -9,22 +9,24 @@
 //
 // Derived from successful SV-4.0.1 / SV-3.3 guidance.
 //
-// SV-6.0:
-// - Major simplification: mission plane control now targets
-//   the requested INCLINATION directly.
-// - The GUI specifies inclination + ascending/descending
-//   branch, not LAN/RAAN. Previous branches over-constrained
-//   the problem by chasing a frozen full orbital plane.
-// - Keeps the successful 1365 m/s launch calibration, which
-//   produced 29.979 deg at booster burnout in SV-5.9.
-// - Upper-stage and terminal trim use a numerical probe to
-//   measure d(inclination)/d(normal dV) at the current state.
-// - A filtered first-order inclination controller applies
-//   only a small normal/yaw bias during the existing burn.
-// - Effectiveness weighting smoothly removes authority where
-//   normal thrust cannot efficiently change inclination.
-// - No cross-track-position target, no dogleg, no node-window
-//   switching, and no standalone plane-change burn.
+// SV-6.1:
+// - Removes the last full-plane constraint from nominal
+//   ascent steering.
+// - The requested inclination now defines the LOCAL inertial
+//   horizontal course directly:
+//
+//       east  = cos(i) / cos(latitude)
+//       north = +/-sqrt(1 - east^2)
+//
+//   with ASCENDING / DESCENDING selecting north or south.
+// - This specifies inclination without fixing LAN / RAAN.
+// - Booster and upper-stage base steering follow this local
+//   inclination course as Kerbin rotates underneath.
+// - Existing Kerbin-rotation compensation is retained for
+//   the booster's surface-relative heading command.
+// - SV-6.0's direct inclination trim remains layered on the
+//   upper-stage and terminal insertion burn.
+// - Frozen-plane geometry is retained only for diagnostics.
 // - SV-3.3 radial/tangential insertion remains unchanged.
 //
 // ======================================================
@@ -46,7 +48,7 @@ SET configGui:X TO 50.
 SET configGui:Y TO 80.
 SET configGui:DRAGGABLE TO TRUE.
 
-SET titleLabel TO configGui:ADDLABEL("SV-6.0 LAUNCH GUIDANCE").
+SET titleLabel TO configGui:ADDLABEL("SV-6.1 LAUNCH GUIDANCE").
 SET titleLabel:STYLE:ALIGN TO "CENTER".
 SET titleLabel:STYLE:HSTRETCH TO TRUE.
 
@@ -209,7 +211,7 @@ SET launchPlaneReferenceSpeed TO 1365.
 SET inclinationProbeDv TO 1.
 
 // Legacy full-plane diagnostics still use this separate
-// +/-1 m/s probe. It is diagnostic only in SV-6.0.
+// +/-1 m/s probe. It is diagnostic only in SV-6.1.
 SET planeProbeDv TO 1.
 
 SET inclinationDerivativeFloor TO 0.0005.
@@ -278,9 +280,9 @@ SET thrustActive TO TRUE.
 // LOG FILES
 // ======================================================
 
-SET flightLog TO "0:/sv60flight.csv".
-SET guidanceLog TO "0:/sv60guidance.csv".
-SET ascentLog TO "0:/sv60ascent.csv".
+SET flightLog TO "0:/sv61flight.csv".
+SET guidanceLog TO "0:/sv61guidance.csv".
+SET ascentLog TO "0:/sv61ascent.csv".
 
 IF EXISTS(flightLog) {
     DELETEPATH(flightLog).
@@ -661,6 +663,97 @@ FUNCTION targetPlaneNow {
     RETURN resultVec:NORMALIZED.
 }.
 
+// ======================================================
+// LOCAL INCLINATION COURSE
+//
+// For target inclination i at current latitude phi:
+//
+//     east = cos(i) / cos(phi)
+//
+// The remaining horizontal component is north/south,
+// selected by the mission branch.  This defines inclination
+// without selecting a fixed LAN / RAAN.
+// ======================================================
+
+FUNCTION inclinationAlongNow {
+
+    LOCAL latNow IS
+        SHIP:LATITUDE.
+
+    LOCAL cosLat IS
+        COS(latNow).
+
+    LOCAL eastFraction IS 0.
+
+    IF ABS(cosLat) >
+       0.000001 {
+
+        SET eastFraction TO
+            COS(targetInclination) /
+            cosLat.
+
+    } ELSE {
+
+        IF COS(targetInclination) > 0 {
+            SET eastFraction TO 1.
+        } ELSE IF COS(targetInclination) < 0 {
+            SET eastFraction TO -1.
+        } ELSE {
+            SET eastFraction TO 0.
+        }.
+    }.
+
+    IF eastFraction > 1 {
+        SET eastFraction TO 1.
+    }.
+
+    IF eastFraction < -1 {
+        SET eastFraction TO -1.
+    }.
+
+    LOCAL northSquared IS
+        1 -
+        eastFraction^2.
+
+    IF northSquared < 0 {
+        SET northSquared TO 0.
+    }.
+
+    LOCAL northFraction IS
+        SQRT(northSquared).
+
+    IF planeBranch = "DESCENDING" {
+        SET northFraction TO
+            -northFraction.
+    }.
+
+    LOCAL northVec IS
+        SHIP:NORTH:VECTOR.
+
+    LOCAL eastVec IS
+        HEADING(90,0):VECTOR.
+
+    LOCAL resultVec IS
+        (
+            northVec *
+            northFraction
+        )
+        +
+        (
+            eastVec *
+            eastFraction
+        ).
+
+    IF resultVec:MAG <
+       0.000001 {
+
+        SET resultVec TO
+            eastVec.
+    }.
+
+    RETURN resultVec:NORMALIZED.
+}.
+
 SET targetPlaneNormal TO
     targetPlaneNow().
 
@@ -668,19 +761,11 @@ SET targetPlaneNormal TO
 // INITIAL DESIRED ALONG-TRACK DIRECTION
 // ======================================================
 
+SET launchAlongHat TO
+    inclinationAlongNow().
+
 SET launchAlongVec TO
-    VCRS(
-        targetPlaneNormal,
-        launchUp
-    )
-    *
-    alongCrossSign.
-
-IF launchAlongVec:MAG < 0.000001 {
-    SET launchAlongVec TO launchEast.
-}.
-
-SET launchAlongHat TO launchAlongVec:NORMALIZED.
+    launchAlongHat.
 
 // ======================================================
 // ROTATION-COMPENSATED LAUNCH AZIMUTH
@@ -753,7 +838,7 @@ SET guidanceAzimuth TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-6.0 MISSION =====".
+PRINT "===== SV-6.1 MISSION =====".
 PRINT "".
 PRINT "TARGET ALT: " + ROUND(orbitTarget / 1000,2) + " km".
 PRINT "TARGET INC: " + ROUND(targetInclination,3) + " deg".
@@ -800,8 +885,8 @@ UNTIL boosterBurnout {
 
     SET surfSpd TO SHIP:VELOCITY:SURFACE:MAG.
 
-    // Recompute the surface-relative heading that follows
-    // the fixed target inertial plane at the current position.
+    // Recompute the surface-relative heading for the local
+    // inertial course corresponding to target inclination.
 
     SET targetPlaneNormal TO
         targetPlaneNow().
@@ -810,23 +895,17 @@ UNTIL boosterBurnout {
     SET planeNorth TO SHIP:NORTH:VECTOR.
     SET planeEast TO HEADING(90,0):VECTOR.
 
-    SET planeAlongVec TO
-        VCRS(
-            targetPlaneNormal,
-            planeUp
-        )
-        *
-        alongCrossSign.
-
-    IF planeAlongVec:MAG < 0.000001 {
-        SET planeAlongVec TO launchAlongHat.
-    }.
+    // Local inertial course for the requested
+    // inclination.  No fixed LAN / RAAN is imposed.
 
     SET planeAlongHat TO
-        planeAlongVec:NORMALIZED.
+        inclinationAlongNow().
+
+    SET planeAlongVec TO
+        planeAlongHat.
 
     // --------------------------------------------------
-    // NOMINAL TARGET-PLANE TANGENT
+    // LEGACY FULL-PLANE DIAGNOSTICS
     // --------------------------------------------------
     //
     // Diagnostics still measure geometric plane position
@@ -1127,9 +1206,9 @@ logState("UPPER_ENGINE_READY").
 // ======================================================
 // UPPER-STAGE ASCENT
 //
-// Inertial target-plane pitch guidance + small normal trim.
-// The trim is a yaw bias on an existing powered burn,
-// never an independent plane-change command.
+// Local inclination-course pitch guidance + small direct
+// inclination trim. Neither base steering nor trim fixes
+// LAN / RAAN.
 // ======================================================
 
 CLEARSCREEN.
@@ -1150,23 +1229,14 @@ UNTIL ascentDone {
     SET planeUp TO
         SHIP:UP:VECTOR.
 
-    SET planeAlongVec TO
-        VCRS(
-            targetPlaneNormal,
-            planeUp
-        )
-        *
-        alongCrossSign.
-
-    IF planeAlongVec:MAG <
-       0.000001 {
-
-        SET planeAlongVec TO
-            launchAlongHat.
-    }.
+    // Local inertial course for the requested
+    // inclination.  This is recomputed as latitude changes.
 
     SET planeAlongHat TO
-        planeAlongVec:NORMALIZED.
+        inclinationAlongNow().
+
+    SET planeAlongVec TO
+        planeAlongHat.
 
     SET orbitVelVec TO
         SHIP:VELOCITY:ORBIT.
@@ -1371,7 +1441,7 @@ UNTIL ascentDone {
     }.
 
     // Local dV required at the current geometry.
-    // This is the key SV-6.0 gain fix.  SV-5.5 multiplied
+    // This is the key SV-6.1 gain fix.  SV-5.5 multiplied
     // ideal plane dV by effectiveness, which REDUCED the
     // command exactly when geometry made each m/s less
     // effective.  The numerical derivative already tells
@@ -2032,7 +2102,7 @@ SET exhaustVelocity TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-6.0 ACQUISITION =====".
+PRINT "===== SV-6.1 ACQUISITION =====".
 
 SET terminalStart TO FALSE.
 SET lastLog TO MISSIONTIME.
@@ -2213,7 +2283,7 @@ UNTIL terminalStart {
 }.
 
 // ======================================================
-// SV-6.0 TERMINAL
+// SV-6.1 TERMINAL
 //
 // Proven radial/tangential SV-3.3 controller with a small
 // normal component layered on as a yaw bias.  The normal
@@ -2224,7 +2294,7 @@ UNTIL terminalStart {
 
 CLEARSCREEN.
 
-PRINT "===== SV-6.0 TERMINAL =====".
+PRINT "===== SV-6.1 TERMINAL =====".
 
 SET terminalStartMET TO
     MISSIONTIME.
@@ -3227,7 +3297,7 @@ UNTIL terminalComplete
     // --------------------------------------------------
 
     PRINT
-        "===== SV-6.0 TERMINAL ====="
+        "===== SV-6.1 TERMINAL ====="
         AT(0,2).
 
     IF captureActive {
@@ -3452,7 +3522,7 @@ UNTIL terminalComplete
        lastFlightLog >= 0.5 {
 
         logState(
-            "SV60_GUIDANCE"
+            "SV61_GUIDANCE"
         ).
 
         SET lastFlightLog TO
@@ -3503,7 +3573,7 @@ IF finalTangentialVec:MAG > 1 {
 
 WAIT 0.25.
 
-logState("SV60_CUTOFF").
+logState("SV61_CUTOFF").
 
 UNLOCK STEERING.
 
@@ -3560,7 +3630,7 @@ SET finalPlaneAngle TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-6.0 GUIDANCE COMPLETE =====".
+PRINT "===== SV-6.1 GUIDANCE COMPLETE =====".
 PRINT "".
 PRINT "Target:         " + ROUND(orbitTarget/1000,2) + " km @ " + ROUND(targetInclination,3) + " deg".
 PRINT "".
@@ -3586,12 +3656,12 @@ IF terminalComplete {
 
 PRINT "".
 PRINT "FLIGHT LOG:".
-PRINT "0:/sv60flight.csv".
+PRINT "0:/sv61flight.csv".
 PRINT "".
 PRINT "GUIDANCE LOG:".
-PRINT "0:/sv60guidance.csv".
+PRINT "0:/sv61guidance.csv".
 PRINT "".
 PRINT "ASCENT LOG:".
-PRINT "0:/sv60ascent.csv".
+PRINT "0:/sv61ascent.csv".
 
 logState("FINAL").
