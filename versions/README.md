@@ -35,3 +35,6 @@ See the repository-level `HISTORY.md` for tested results and development rationa
 - `sv60_inclination_only_trim.ks` — current SV-6.0 branch: inclination-only numerical normal-trim controller.
 
 - `sv61_local_inclination_course.ks` — current SV-6.1 branch: local inclination-derived ascent course with direct inclination trim.
+
+- `sv62_speed_matched_rotation_prepoint.ks` — SV-6.2 intermediate branch with speed-matched booster rotation compensation and upper-stage pre-pointing.
+- `sv63_horizontal_velocity_servo.ks` — current SV-6.3 branch: horizontal inertial velocity-vector course servo.
