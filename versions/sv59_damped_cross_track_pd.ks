@@ -212,6 +212,11 @@ SET crossTrackVelocityTime TO 12.
 SET crossTrackVelocityLimit TO 20.
 SET crossTrackFilterGain TO 0.12.
 
+// Compatibility for the still-present orbital-normal
+// diagnostic probe. The cross-track controller itself does
+// not use this value, but the diagnostic block references it.
+SET planeProbeDv TO 1.
+
 SET upperCrossTrackMaxQ TO 0.015.
 SET upperCrossTrackMaxSteerError TO 6.
 SET upperCrossTrackMaxYaw TO 2.
