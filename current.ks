@@ -1,5 +1,5 @@
 // ======================================================
-// SV-6.1 MISSION CONFIG
+// SV-6.2 MISSION CONFIG
 // 0.625 m TWO-STAGE LIQUID LAUNCHER
 //
 // CONFIGURABLE:
@@ -9,25 +9,30 @@
 //
 // Derived from successful SV-4.0.1 / SV-3.3 guidance.
 //
-// SV-6.1:
-// - Removes the last full-plane constraint from nominal
-//   ascent steering.
-// - The requested inclination now defines the LOCAL inertial
-//   horizontal course directly:
+// SV-6.2:
+// - Keeps SV-6.1's inclination-derived local inertial course.
+// - Fixes the polar booster miss by replacing the fixed
+//   1365 m/s rotation-compensation approximation with a
+//   speed-matched solution once horizontal speed is high
+//   enough.
 //
-//       east  = cos(i) / cos(latitude)
-//       north = +/-sqrt(1 - east^2)
+//   Given desired inertial horizontal unit vector u,
+//   surface horizontal speed S, and local rotational
+//   velocity R, solve:
 //
-//   with ASCENDING / DESCENDING selecting north or south.
-// - This specifies inclination without fixing LAN / RAAN.
-// - Booster and upper-stage base steering follow this local
-//   inclination course as Kerbin rotates underneath.
-// - Existing Kerbin-rotation compensation is retained for
-//   the booster's surface-relative heading command.
-// - SV-6.0's direct inclination trim remains layered on the
-//   upper-stage and terminal insertion burn.
-// - Frozen-plane geometry is retained only for diagnostics.
-// - SV-3.3 radial/tangential insertion remains unchanged.
+//       |V*u - R| = S
+//
+//   for the positive inertial speed V, then steer along
+//   V*u - R in the rotating surface frame.
+//
+// - Blends smoothly from the proven fixed-reference heading
+//   at low speed to the exact speed-matched heading.
+// - Pre-points the upper stage during coast and delays
+//   ignition until q is low and attitude is settled.
+// - Keeps SV-6.0/6.1's direct inclination trim and the
+//   proven SV-3.3 radial/tangential insertion controller.
+// - Fixes duplicated inclination columns in ascent/guidance
+//   CSV logging.
 //
 // ======================================================
 
@@ -48,7 +53,7 @@ SET configGui:X TO 50.
 SET configGui:Y TO 80.
 SET configGui:DRAGGABLE TO TRUE.
 
-SET titleLabel TO configGui:ADDLABEL("SV-6.1 LAUNCH GUIDANCE").
+SET titleLabel TO configGui:ADDLABEL("SV-6.2 LAUNCH GUIDANCE").
 SET titleLabel:STYLE:ALIGN TO "CENTER".
 SET titleLabel:STYLE:HSTRETCH TO TRUE.
 
@@ -192,6 +197,19 @@ SET radialAccelLimit TO 6.
 
 SET launchPlaneReferenceSpeed TO 1365.
 
+// Dynamic booster rotation compensation.
+// Below blend start retain the proven fixed-reference
+// heading. Above blend end use the exact speed-matched
+// surface heading.
+SET rotationBlendStartSpeed TO 300.
+SET rotationBlendFullSpeed TO 700.
+
+// Upper-stage ignition sequencing.
+SET upperIgnitionMaxQ TO 0.010.
+SET upperIgnitionMaxSteerError TO 3.
+SET upperIgnitionAlignHold TO 0.50.
+SET upperClearanceMinTime TO 1.80.
+
 // Small yaw correction during the already-required
 // second-stage burn.  It is never allowed to become a
 // dedicated plane-change maneuver.
@@ -211,14 +229,14 @@ SET launchPlaneReferenceSpeed TO 1365.
 SET inclinationProbeDv TO 1.
 
 // Legacy full-plane diagnostics still use this separate
-// +/-1 m/s probe. It is diagnostic only in SV-6.1.
+// +/-1 m/s probe. It is diagnostic only in SV-6.2.
 SET planeProbeDv TO 1.
 
 SET inclinationDerivativeFloor TO 0.0005.
 SET inclinationFilterGain TO 0.12.
 
 SET upperInclinationTimeConstant TO 12.
-SET upperInclinationMaxQ TO 0.015.
+SET upperInclinationMaxQ TO 0.010.
 SET upperInclinationMaxSteerError TO 6.
 SET upperInclinationMaxYaw TO 2.
 
@@ -280,9 +298,9 @@ SET thrustActive TO TRUE.
 // LOG FILES
 // ======================================================
 
-SET flightLog TO "0:/sv61flight.csv".
-SET guidanceLog TO "0:/sv61guidance.csv".
-SET ascentLog TO "0:/sv61ascent.csv".
+SET flightLog TO "0:/sv62flight.csv".
+SET guidanceLog TO "0:/sv62guidance.csv".
+SET ascentLog TO "0:/sv62ascent.csv".
 
 IF EXISTS(flightLog) {
     DELETEPATH(flightLog).
@@ -838,7 +856,7 @@ SET guidanceAzimuth TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-6.1 MISSION =====".
+PRINT "===== SV-6.2 MISSION =====".
 PRINT "".
 PRINT "TARGET ALT: " + ROUND(orbitTarget / 1000,2) + " km".
 PRINT "TARGET INC: " + ROUND(targetInclination,3) + " deg".
@@ -984,58 +1002,182 @@ UNTIL boosterBurnout {
             ascentCrossAxis
         ).
 
-    SET desiredPlaneInertialVel TO
-        planeAlongHat *
-        launchPlaneReferenceSpeed.
-
     SET planeRotationVel TO
         SHIP:VELOCITY:ORBIT -
         SHIP:VELOCITY:SURFACE.
 
-    SET desiredPlaneSurfaceVel TO
-        desiredPlaneInertialVel -
-        planeRotationVel.
-
-    SET desiredPlaneSurfaceVel TO
-        desiredPlaneSurfaceVel -
+    SET planeRotationHorizontal TO
+        planeRotationVel -
         (
             planeUp *
             VDOT(
-                desiredPlaneSurfaceVel,
+                planeRotationVel,
                 planeUp
             )
         ).
 
-    IF desiredPlaneSurfaceVel:MAG >
+    SET surfaceVelNow TO
+        SHIP:VELOCITY:SURFACE.
+
+    SET surfaceRadialVel TO
+        VDOT(
+            surfaceVelNow,
+            planeUp
+        ).
+
+    SET surfaceHorizontalVel TO
+        surfaceVelNow -
+        (
+            planeUp *
+            surfaceRadialVel
+        ).
+
+    SET surfaceHorizontalSpeed TO
+        surfaceHorizontalVel:MAG.
+
+    // Low-speed reference solution.
+    SET fixedSurfaceVec TO
+        (
+            planeAlongHat *
+            launchPlaneReferenceSpeed
+        )
+        -
+        planeRotationHorizontal.
+
+    IF fixedSurfaceVec:MAG <
+       0.000001 {
+
+        SET fixedSurfaceVec TO
+            planeAlongHat.
+    }.
+
+    SET fixedSurfaceHat TO
+        fixedSurfaceVec:NORMALIZED.
+
+    // Exact speed-matched solution:
+    // |V*u - R| = current surface horizontal speed.
+
+    SET exactSurfaceHat TO
+        fixedSurfaceHat.
+
+    SET uDotR TO
+        VDOT(
+            planeAlongHat,
+            planeRotationHorizontal
+        ).
+
+    SET rotationPerpSquared TO
+        planeRotationHorizontal:MAG^2
+        -
+        uDotR^2.
+
+    IF rotationPerpSquared < 0 {
+        SET rotationPerpSquared TO 0.
+    }.
+
+    SET exactDiscriminant TO
+        surfaceHorizontalSpeed^2
+        -
+        rotationPerpSquared.
+
+    IF exactDiscriminant >= 0
+       AND
+       surfaceHorizontalSpeed >
+       1 {
+
+        SET matchedInertialSpeed TO
+            uDotR +
+            SQRT(
+                exactDiscriminant
+            ).
+
+        IF matchedInertialSpeed < 1 {
+            SET matchedInertialSpeed TO 1.
+        }.
+
+        SET exactSurfaceVec TO
+            (
+                planeAlongHat *
+                matchedInertialSpeed
+            )
+            -
+            planeRotationHorizontal.
+
+        IF exactSurfaceVec:MAG >
+           0.000001 {
+
+            SET exactSurfaceHat TO
+                exactSurfaceVec:NORMALIZED.
+        }.
+    }.
+
+    SET rotationBlend TO
+        (
+            surfaceHorizontalSpeed -
+            rotationBlendStartSpeed
+        )
+        /
+        (
+            rotationBlendFullSpeed -
+            rotationBlendStartSpeed
+        ).
+
+    IF rotationBlend < 0 {
+        SET rotationBlend TO 0.
+    }.
+
+    IF rotationBlend > 1 {
+        SET rotationBlend TO 1.
+    }.
+
+    SET desiredPlaneSurfaceHat TO
+        (
+            fixedSurfaceHat *
+            (
+                1 -
+                rotationBlend
+            )
+        )
+        +
+        (
+            exactSurfaceHat *
+            rotationBlend
+        ).
+
+    IF desiredPlaneSurfaceHat:MAG <
        0.000001 {
 
         SET desiredPlaneSurfaceHat TO
-            desiredPlaneSurfaceVel:NORMALIZED.
+            fixedSurfaceHat.
+    } ELSE {
 
-        SET planeNorthComponent TO
-            VDOT(
-                desiredPlaneSurfaceHat,
-                planeNorth
-            ).
+        SET desiredPlaneSurfaceHat TO
+            desiredPlaneSurfaceHat:NORMALIZED.
+    }.
 
-        SET planeEastComponent TO
-            VDOT(
-                desiredPlaneSurfaceHat,
-                planeEast
-            ).
+    SET planeNorthComponent TO
+        VDOT(
+            desiredPlaneSurfaceHat,
+            planeNorth
+        ).
+
+    SET planeEastComponent TO
+        VDOT(
+            desiredPlaneSurfaceHat,
+            planeEast
+        ).
+
+    SET guidanceAzimuth TO
+        ARCTAN2(
+            planeEastComponent,
+            planeNorthComponent
+        ).
+
+    IF guidanceAzimuth < 0 {
 
         SET guidanceAzimuth TO
-            ARCTAN2(
-                planeEastComponent,
-                planeNorthComponent
-            ).
-
-        IF guidanceAzimuth < 0 {
-
-            SET guidanceAzimuth TO
-                guidanceAzimuth +
-                360.
-        }.
+            guidanceAzimuth +
+            360.
     }.
 
     IF surfSpd < 40 {
@@ -1185,15 +1327,116 @@ UNTIL boosterDropped {
 }.
 
 // ======================================================
-// BOOSTER CLEARANCE
+// BOOSTER CLEARANCE / UPPER PRE-POINT
 // ======================================================
 
 SET throttleCmd TO 0.
-
 LOCK THROTTLE TO throttleCmd.
-LOCK STEERING TO SRFPROGRADE.
 
-WAIT 1.8.
+SET clearanceStartMET TO
+    MISSIONTIME.
+
+SET upperAlignStartMET TO -1.
+SET upperReady TO FALSE.
+
+UNTIL upperReady {
+
+    SET coastUp TO
+        SHIP:UP:VECTOR.
+
+    SET coastAlong TO
+        inclinationAlongNow().
+
+    SET coastSurfSpd TO
+        SHIP:VELOCITY:SURFACE:MAG.
+
+    SET coastFpa TO 0.
+
+    IF coastSurfSpd > 1 {
+
+        SET coastFpaRatio TO
+            SHIP:VERTICALSPEED /
+            coastSurfSpd.
+
+        IF coastFpaRatio > 1 {
+            SET coastFpaRatio TO 1.
+        }.
+
+        IF coastFpaRatio < -1 {
+            SET coastFpaRatio TO -1.
+        }.
+
+        SET coastFpa TO
+            ARCSIN(
+                coastFpaRatio
+            ).
+    }.
+
+    SET upperPrepointVec TO
+        (
+            coastAlong *
+            COS(
+                coastFpa
+            )
+        )
+        +
+        (
+            coastUp *
+            SIN(
+                coastFpa
+            )
+        ).
+
+    IF upperPrepointVec:MAG >
+       0.000001 {
+
+        LOCK STEERING TO
+            upperPrepointVec:NORMALIZED.
+    }.
+
+    SET clearanceTimeOk TO
+        MISSIONTIME -
+        clearanceStartMET >=
+        upperClearanceMinTime.
+
+    SET qOk TO
+        SHIP:Q <=
+        upperIgnitionMaxQ.
+
+    SET steerOk TO
+        ABS(
+            STEERINGMANAGER:ANGLEERROR
+        ) <=
+        upperIgnitionMaxSteerError.
+
+    IF clearanceTimeOk
+       AND qOk
+       AND steerOk {
+
+        IF upperAlignStartMET < 0 {
+            SET upperAlignStartMET TO
+                MISSIONTIME.
+        }.
+
+        IF MISSIONTIME -
+           upperAlignStartMET >=
+           upperIgnitionAlignHold {
+
+            SET upperReady TO TRUE.
+        }.
+
+    } ELSE {
+
+        SET upperAlignStartMET TO -1.
+    }.
+
+    PRINT "UPPER PRE-POINT       " AT(0,6).
+    PRINT "Q: " + ROUND(SHIP:Q,4) + " atm      " AT(0,8).
+    PRINT "STEER ERR: " + ROUND(STEERINGMANAGER:ANGLEERROR,2) + " deg      " AT(0,9).
+    PRINT "INC: " + ROUND(SHIP:OBT:INCLINATION,3) + " deg      " AT(0,10).
+
+    WAIT 0.02.
+}.
 
 IF SHIP:AVAILABLETHRUST < 0.1 {
 
@@ -1441,7 +1684,7 @@ UNTIL ascentDone {
     }.
 
     // Local dV required at the current geometry.
-    // This is the key SV-6.1 gain fix.  SV-5.5 multiplied
+    // This is the key SV-6.2 gain fix.  SV-5.5 multiplied
     // ideal plane dV by effectiveness, which REDUCED the
     // command exactly when geometry made each m/s less
     // effective.  The numerical derivative already tells
@@ -1898,7 +2141,6 @@ UNTIL ascentDone {
         LOG
             ROUND(MISSIONTIME,3) + "," +
             ROUND(SHIP:ALTITUDE,3) + "," +
-            ROUND(SHIP:OBT:INCLINATION,7) + "," +
             ROUND(currentInclination,7) + "," +
             ROUND(inclinationError,7) + "," +
             ROUND(inclinationDerivative,7) + "," +
@@ -2102,7 +2344,7 @@ SET exhaustVelocity TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-6.1 ACQUISITION =====".
+PRINT "===== SV-6.2 ACQUISITION =====".
 
 SET terminalStart TO FALSE.
 SET lastLog TO MISSIONTIME.
@@ -2283,7 +2525,7 @@ UNTIL terminalStart {
 }.
 
 // ======================================================
-// SV-6.1 TERMINAL
+// SV-6.2 TERMINAL
 //
 // Proven radial/tangential SV-3.3 controller with a small
 // normal component layered on as a yaw bias.  The normal
@@ -2294,7 +2536,7 @@ UNTIL terminalStart {
 
 CLEARSCREEN.
 
-PRINT "===== SV-6.1 TERMINAL =====".
+PRINT "===== SV-6.2 TERMINAL =====".
 
 SET terminalStartMET TO
     MISSIONTIME.
@@ -3297,7 +3539,7 @@ UNTIL terminalComplete
     // --------------------------------------------------
 
     PRINT
-        "===== SV-6.1 TERMINAL ====="
+        "===== SV-6.2 TERMINAL ====="
         AT(0,2).
 
     IF captureActive {
@@ -3482,7 +3724,6 @@ UNTIL terminalComplete
             actuatorText + "," +
             ROUND(SHIP:ALTITUDE,3) + "," +
             ROUND(currentInclination,7) + "," +
-            ROUND(currentInclination,7) + "," +
             ROUND(inclinationError,7) + "," +
             ROUND(inclinationDerivative,7) + "," +
             ROUND(inclinationEffectiveness,5) + "," +
@@ -3522,7 +3763,7 @@ UNTIL terminalComplete
        lastFlightLog >= 0.5 {
 
         logState(
-            "SV61_GUIDANCE"
+            "SV62_GUIDANCE"
         ).
 
         SET lastFlightLog TO
@@ -3573,7 +3814,7 @@ IF finalTangentialVec:MAG > 1 {
 
 WAIT 0.25.
 
-logState("SV61_CUTOFF").
+logState("SV62_CUTOFF").
 
 UNLOCK STEERING.
 
@@ -3630,7 +3871,7 @@ SET finalPlaneAngle TO
 
 CLEARSCREEN.
 
-PRINT "===== SV-6.1 GUIDANCE COMPLETE =====".
+PRINT "===== SV-6.2 GUIDANCE COMPLETE =====".
 PRINT "".
 PRINT "Target:         " + ROUND(orbitTarget/1000,2) + " km @ " + ROUND(targetInclination,3) + " deg".
 PRINT "".
@@ -3656,12 +3897,12 @@ IF terminalComplete {
 
 PRINT "".
 PRINT "FLIGHT LOG:".
-PRINT "0:/sv61flight.csv".
+PRINT "0:/sv62flight.csv".
 PRINT "".
 PRINT "GUIDANCE LOG:".
-PRINT "0:/sv61guidance.csv".
+PRINT "0:/sv62guidance.csv".
 PRINT "".
 PRINT "ASCENT LOG:".
-PRINT "0:/sv61ascent.csv".
+PRINT "0:/sv62ascent.csv".
 
 logState("FINAL").
