@@ -256,3 +256,27 @@
 - Keeps the successful 1365 m/s rotation-compensation reference and delayed upper-stage ignition.
 - Keeps SV-6.0's numerical inclination-only normal trim for residual powered-flight correction.
 - Frozen target-plane geometry remains diagnostic only.
+
+## SV-6.1 80 km / 90° test
+
+- **ORBIT PASS / INCLINATION MISS** — final 80.00011 × 79.99033 km, inclination 88.587195°.
+- The local inclination-course heading improved the architecture but did not eliminate unwanted east/west inertial horizontal velocity.
+- The remaining powered-burn inclination trim recovered some of the polar error but ran out of burn before reaching 90°.
+- This showed that the controller needs to close the loop on the actual horizontal inertial velocity vector, not only on commanded course heading or scalar inclination.
+
+## SV-6.2 — speed-matched rotation compensation / upper pre-point
+
+- Replaced the fixed high-speed rotation-compensation approximation with a speed-matched surface-heading solution.
+- Blends from the proven fixed-reference launch solution at low speed to the exact speed-matched solution at higher horizontal speed.
+- Pre-points the upper stage during the coast and delays ignition until low q / good steering alignment.
+- Retains inclination-derived local course and the SV-6.0 scalar inclination trim.
+
+## SV-6.3 — horizontal inertial velocity-vector servo
+
+- Keeps SV-6.2's rotation-matched nominal booster heading and upper-stage pre-pointing.
+- Adds booster feedback from measured inertial cross-course horizontal velocity.
+- Replaces scalar inclination trim during upper-stage / terminal powered flight with a direct cross-course velocity servo.
+- Uses `a_cross = -v_cross / tau`, filtering, and strict yaw limits.
+- For a polar launch this explicitly drives east/west inertial horizontal velocity toward zero.
+- For arbitrary inclination it drives the actual horizontal velocity vector onto the local course implied by the requested inclination, without fixing LAN / RAAN.
+- Course correction remains subordinate to the existing powered burn; SV-3.3 radial/tangential insertion remains unchanged.
